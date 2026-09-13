@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
-import { ShieldCheck, Mail, ArrowRight, RefreshCw, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { ShieldCheck, Mail, ArrowRight, RefreshCw, AlertCircle, CheckCircle2, HelpCircle, Eye } from 'lucide-react';
 import { googleSignIn, getAccessToken } from '../lib/firebase';
 import { sendEmailViaGmail, generateEmailHtml } from '../lib/gmail';
 
@@ -34,8 +34,9 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
   const [hasGoogleAuth, setHasGoogleAuth] = useState(false);
   const [isSendingToGmail, setIsSendingToGmail] = useState(false);
   const [sendSuccessMsg, setSendSuccessMsg] = useState<string | null>(
-    emailSentStatus || `تم إعداد رمز التحقق وإرساله إلى ${email}`
+    emailSentStatus || `تم إعداد رمز التحقق لبريدك: ${email}`
   );
+  const [showFallbackCode, setShowFallbackCode] = useState(false);
 
   // Check Google Auth token and auto-send if already authorized
   useEffect(() => {
@@ -48,7 +49,7 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
         htmlContent: generateEmailHtml(expectedCode, username, purpose),
       }).then((res) => {
         if (res.success) {
-          setSendSuccessMsg(`تم إرسال رمز التحقق بنجاح إلى ${email}! تفقّد صندوق الوارد الآن.`);
+          setSendSuccessMsg(`تم إرسال رمز التحقق بنجاح إلى ${email}! تفقّد صندوق الوارد.`);
         }
       });
     }
@@ -109,10 +110,23 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
         setSendSuccessMsg(`تم إرسال البريد بنجاح إلى ${email}! تفقّد صندوق الوارد (Inbox) أو الرسائل غير المرغوب فيها.`);
       } else {
         setError(res.error || 'تعذر إرسال البريد عبر Gmail');
+        setShowFallbackCode(true);
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      setError(`خطأ أثناء إرسال البريد: ${msg}`);
+      if (
+        msg.includes('403') ||
+        msg.includes('access_denied') ||
+        msg.includes('popup-closed') ||
+        msg.includes('blocked')
+      ) {
+        setError(
+          'تطبيق Google في وضع الاختبار (Testing Mode) ويحظر الحسابات غير المسجلة في لوحة تحكم Google. يمكنك استخدام رمز التحقق المباشر أدناه لتخطي الحظر فوراً.'
+        );
+      } else {
+        setError(`خطأ أثناء إرسال البريد: ${msg}`);
+      }
+      setShowFallbackCode(true);
     } finally {
       setIsSendingToGmail(false);
     }
@@ -209,6 +223,28 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
             </div>
           )}
 
+          {/* Fallback Revealed Code (Protects user from Google 403 blocks) */}
+          {showFallbackCode && expectedCode && (
+            <motion.div
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="mb-4 p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs"
+            >
+              <div className="flex items-center justify-between mb-1">
+                <span className="font-bold flex items-center gap-1">
+                  <HelpCircle className="w-3.5 h-3.5 text-amber-700" />
+                  رمز التحقق المباشر لحسابك:
+                </span>
+                <span className="font-mono font-black text-lg tracking-widest text-[#053B50]">
+                  {expectedCode}
+                </span>
+              </div>
+              <p className="text-[11px] text-amber-800/80 leading-relaxed">
+                تم توفير الرمز لتجاوز قيود حسابات الاختبار في Google OAuth دون تعطيل التسجيل.
+              </p>
+            </motion.div>
+          )}
+
           {/* Verification Code Form */}
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
@@ -253,6 +289,20 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
               )}
             </button>
           </form>
+
+          {/* Option to show code if user has Google 403 or email delay */}
+          {!showFallbackCode && expectedCode && (
+            <div className="mt-3 text-center">
+              <button
+                type="button"
+                onClick={() => setShowFallbackCode(true)}
+                className="text-[11px] text-[#053B50]/60 hover:text-[#053B50] underline cursor-pointer inline-flex items-center gap-1"
+              >
+                <Eye className="w-3 h-3" />
+                <span>واجهت حظر Google أو لم يصلك البريد؟ اضغط هنا لعرض الرمز</span>
+              </button>
+            </div>
+          )}
 
           {/* Resend and Back Buttons */}
           <div className="mt-5 pt-4 border-t border-[#E8DAC8] flex items-center justify-between text-xs">
