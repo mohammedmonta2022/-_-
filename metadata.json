@@ -1,0 +1,6 @@
+{
+  "name": "مجمع عزم التعليمي - تسجيل الدخول",
+  "description": "بوابة تسجيل الدخول الرسمية والحديثة لمجمع عزم التعليمي",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

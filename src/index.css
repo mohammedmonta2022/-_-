@@ -1,0 +1,31 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --navy: #053B50;
+    --navy-hover: #042E3F;
+    --cream: #E8DAC8;
+    --cream-light: #F7F3EE;
+    --cream-border: #DFCEB8;
+    --white: #FFFFFF;
+  }
+
+  body {
+    background-color: #FFFFFF;
+    color: #053B50;
+    font-family: 'Cairo', system-ui, -apple-system, sans-serif;
+  }
+}
+
+/* Custom smooth scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #F7F3EE;
+}
+::-webkit-scrollbar-thumb {
+  background: #053B50;
+  border-radius: 4px;
+}
+
