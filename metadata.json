@@ -1,6 +1,6 @@
 {
   "name": "مجمع عزم التعليمي - تسجيل الدخول",
-  "description": "بوابة تسجيل الدخول الرسمية والحديثة لمجمع عزم التعليمي",
+  "description": "البوابة الإلكترونية الموحدة لمجمع عزم التعليمي لإنشاء الحسابات، التحقق عبر Gmail، وتسجيل الدخول المحفوظ في Firebase",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

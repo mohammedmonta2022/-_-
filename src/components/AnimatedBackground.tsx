@@ -1,120 +1,88 @@
-import React, { useMemo } from 'react';
-import { motion } from 'motion/react';
+import React from 'react';
 
+/**
+ * High-performance, GPU-accelerated living background
+ * Utilizes hardware composited transforms (translate3d) and soft radial gradients
+ * to ensure buttery-smooth 60+ FPS performance with zero lag or stutter.
+ */
 export const AnimatedBackground: React.FC = () => {
-  // Generate random animated floating organic orbs and geometric accents
-  const particles = useMemo(() => {
-    return Array.from({ length: 18 }).map((_, i) => ({
-      id: i,
-      x: (i * 17 + 8) % 95,
-      y: (i * 23 + 12) % 90,
-      size: (i % 3 + 1) * 60 + 40,
-      duration: 14 + (i % 6) * 4,
-      delay: (i % 5) * 1.5,
-      isNavy: i % 3 === 0,
-      isCream: i % 3 === 1,
-    }));
-  }, []);
-
   return (
     <div className="fixed inset-0 pointer-events-none z-0 overflow-hidden select-none">
-      {/* Dynamic Animated Gradient Mesh Layers */}
-      <motion.div
-        animate={{
-          scale: [1, 1.12, 0.96, 1],
-          x: [0, 40, -30, 0],
-          y: [0, -35, 25, 0],
-        }}
-        transition={{
-          duration: 20,
-          repeat: Infinity,
-          ease: 'easeInOut',
-        }}
-        className="absolute -top-[20%] -right-[15%] w-[650px] h-[650px] rounded-full blur-3xl opacity-25"
+      {/* Background Soft Base Tint */}
+      <div className="absolute inset-0 bg-[#FFFFFF]" />
+
+      {/* Large Glowing Ambient Cream Orb (Top Right) */}
+      <div
+        className="anim-orb-1 absolute -top-24 -right-24 w-[480px] h-[480px] sm:w-[620px] sm:h-[620px] rounded-full pointer-events-none"
         style={{
-          background: 'radial-gradient(circle, #E8DAC8 0%, rgba(232,218,200,0) 70%)',
+          background: 'radial-gradient(circle, rgba(232, 218, 200, 0.45) 0%, rgba(232, 218, 200, 0.18) 45%, rgba(232, 218, 200, 0) 70%)',
         }}
       />
 
-      <motion.div
-        animate={{
-          scale: [1, 0.92, 1.08, 1],
-          x: [0, -50, 40, 0],
-          y: [0, 40, -30, 0],
-        }}
-        transition={{
-          duration: 24,
-          repeat: Infinity,
-          ease: 'easeInOut',
-        }}
-        className="absolute -bottom-[20%] -left-[15%] w-[700px] h-[700px] rounded-full blur-3xl opacity-20"
+      {/* Large Glowing Ambient Navy Teal Orb (Bottom Left) */}
+      <div
+        className="anim-orb-2 absolute -bottom-28 -left-28 w-[500px] h-[500px] sm:w-[680px] sm:h-[680px] rounded-full pointer-events-none"
         style={{
-          background: 'radial-gradient(circle, #053B50 0%, rgba(5,59,80,0) 70%)',
+          background: 'radial-gradient(circle, rgba(5, 59, 80, 0.16) 0%, rgba(5, 59, 80, 0.06) 50%, rgba(5, 59, 80, 0) 70%)',
         }}
       />
 
-      <motion.div
-        animate={{
-          scale: [0.95, 1.15, 0.95],
-          x: [0, 30, 0],
-          y: [0, -40, 0],
-        }}
-        transition={{
-          duration: 18,
-          repeat: Infinity,
-          ease: 'easeInOut',
-        }}
-        className="absolute top-[35%] left-[25%] w-[480px] h-[480px] rounded-full blur-3xl opacity-15"
+      {/* Center Delicate Accent Glow */}
+      <div
+        className="anim-orb-3 absolute top-1/3 left-1/4 w-[380px] h-[380px] rounded-full pointer-events-none"
         style={{
-          background: 'radial-gradient(circle, #E8DAC8 0%, rgba(232,218,200,0) 70%)',
+          background: 'radial-gradient(circle, rgba(232, 218, 200, 0.35) 0%, rgba(232, 218, 200, 0.10) 50%, rgba(232, 218, 200, 0) 70%)',
         }}
       />
 
-      {/* Floating Animated Ambient Glowing Particles */}
-      {particles.map((p) => (
-        <motion.div
-          key={p.id}
-          animate={{
-            y: [0, -40, 0, 40, 0],
-            x: [0, 25, -20, 15, 0],
-            scale: [1, 1.15, 0.9, 1.05, 1],
-            opacity: [0.15, 0.35, 0.2, 0.3, 0.15],
-          }}
-          transition={{
-            duration: p.duration,
-            repeat: Infinity,
-            delay: p.delay,
-            ease: 'easeInOut',
-          }}
-          className="absolute rounded-full pointer-events-none blur-sm"
-          style={{
-            left: `${p.x}%`,
-            top: `${p.y}%`,
-            width: `${p.size}px`,
-            height: `${p.size}px`,
-            backgroundColor: p.isNavy
-              ? '#053B50'
-              : p.isCream
-              ? '#E8DAC8'
-              : '#F7F3EE',
-          }}
-        />
-      ))}
+      {/* Smooth Floating Accent Dots (Zero JS runtime load) */}
+      <div
+        className="anim-particle absolute top-[18%] left-[12%] w-3.5 h-3.5 rounded-full pointer-events-none"
+        style={{
+          backgroundColor: '#E8DAC8',
+          boxShadow: '0 0 16px 4px rgba(232, 218, 200, 0.6)',
+          animationDelay: '0s',
+        }}
+      />
+      <div
+        className="anim-particle absolute top-[75%] left-[82%] w-3 h-3 rounded-full pointer-events-none"
+        style={{
+          backgroundColor: '#053B50',
+          boxShadow: '0 0 12px 3px rgba(5, 59, 80, 0.25)',
+          animationDelay: '3s',
+        }}
+      />
+      <div
+        className="anim-particle absolute top-[30%] right-[18%] w-4 h-4 rounded-full pointer-events-none"
+        style={{
+          backgroundColor: '#E8DAC8',
+          boxShadow: '0 0 18px 5px rgba(232, 218, 200, 0.7)',
+          animationDelay: '6s',
+        }}
+      />
+      <div
+        className="anim-particle absolute bottom-[22%] left-[28%] w-2.5 h-2.5 rounded-full pointer-events-none"
+        style={{
+          backgroundColor: '#053B50',
+          boxShadow: '0 0 10px 2px rgba(5, 59, 80, 0.2)',
+          animationDelay: '9s',
+        }}
+      />
 
-      {/* Modern Wave Lines / Floating Architectural Cadence */}
+      {/* Crisp Geometric Pattern Overlay */}
       <svg
-        className="absolute w-full h-full opacity-[0.04] pointer-events-none"
+        className="absolute inset-0 w-full h-full opacity-[0.03] pointer-events-none"
         xmlns="http://www.w3.org/2000/svg"
       >
         <defs>
-          <pattern id="azm-grid" width="48" height="48" patternUnits="userSpaceOnUse">
+          <pattern id="azm-grid" width="44" height="44" patternUnits="userSpaceOnUse">
             <path
-              d="M 48 0 L 0 0 0 48"
+              d="M 44 0 L 0 0 0 44"
               fill="none"
               stroke="#053B50"
               strokeWidth="1.2"
             />
-            <circle cx="24" cy="24" r="1.5" fill="#E8DAC8" />
+            <circle cx="22" cy="22" r="1.5" fill="#E8DAC8" />
           </pattern>
         </defs>
         <rect width="100%" height="100%" fill="url(#azm-grid)" />

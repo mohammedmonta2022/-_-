@@ -1,0 +1,73 @@
+{
+  "entities": {
+    "UserAccount": {
+      "title": "UserAccount",
+      "description": "بيانات حساب المستخدم في مجمع عزم التعليمي",
+      "type": "object",
+      "properties": {
+        "username": {
+          "type": "string",
+          "description": "اسم المستخدم الفريد"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "البريد الإلكتروني"
+        },
+        "password": {
+          "type": "string",
+          "description": "كلمة المرور المشفرة"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "تاريخ إنشاء الحساب"
+        },
+        "isVerified": {
+          "type": "boolean",
+          "description": "حالة التحقق من البريد"
+        }
+      },
+      "required": ["username", "email", "password", "createdAt"]
+    },
+    "VerificationCode": {
+      "title": "VerificationCode",
+      "description": "رمز التحقق المرسل عبر البريد الإلكتروني",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "البريد الإلكتروني المستلم"
+        },
+        "code": {
+          "type": "string",
+          "description": "رمز التحقق المكون من 6 أرقام"
+        },
+        "purpose": {
+          "type": "string",
+          "enum": ["register", "reset_password"],
+          "description": "الغرض من الرمز"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "وقت إنشاء الرمز"
+        },
+        "expiresAt": {
+          "type": "string",
+          "description": "وقت انتهاء صلاحية الرمز"
+        }
+      },
+      "required": ["email", "code", "purpose", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserAccount",
+      "description": "مجموعة حسابات المستخدمين في مجمع عزم التعليمي"
+    },
+    "/verification_codes/{codeId}": {
+      "schema": "VerificationCode",
+      "description": "سجلات رموز التحقق المرسلة للمستخدمين"
+    }
+  }
+}
