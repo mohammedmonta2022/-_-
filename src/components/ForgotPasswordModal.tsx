@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { motion } from 'motion/react';
 import { KeyRound, Mail, Lock, Eye, EyeOff, AlertCircle, CheckCircle2, RefreshCw, X, ArrowLeft, HelpCircle } from 'lucide-react';
-import { findUser, saveVerificationCode, verifyCode, updateUserPassword, googleSignIn, getAccessToken } from '../lib/firebase';
+import { findUser, saveVerificationCode, verifyCode, updateUserPassword, getSavedSenderToken, authorizeSenderEmail } from '../lib/firebase';
 import { sendEmailViaGmail, generateEmailHtml } from '../lib/gmail';
 
 interface ForgotPasswordModalProps {
@@ -65,8 +65,8 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
       // Save code in Firestore
       await saveVerificationCode(user.email, generatedCode, 'reset_password');
 
-      // Attempt automatic dispatch via Gmail if token already exists
-      const token = getAccessToken();
+      // Attempt automatic dispatch via Gmail if token already saved in Firestore
+      const token = await getSavedSenderToken();
       if (token) {
         sendEmailViaGmail({
           to: user.email,
@@ -97,14 +97,17 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
     setGmailSentSuccess(null);
 
     try {
-      let token = getAccessToken();
+      let token = await getSavedSenderToken();
       if (!token) {
-        const authRes = await googleSignIn();
-        token = authRes?.accessToken || null;
+        const authRes = await authorizeSenderEmail(targetEmail);
+        if (!authRes.success) {
+          throw new Error(authRes.error || 'تعذر الحصول على تفويض Google');
+        }
+        token = await getSavedSenderToken();
       }
 
       if (!token) {
-        setError('يرجى تسجيل الدخول بحساب Google للسماح بإرسال البريد');
+        setError('يرجى تسجيل الدخول بحساب Google للسماح بإرسال البريد وحفظ التفويض في فايربيس');
         setIsSendingGmail(false);
         return;
       }

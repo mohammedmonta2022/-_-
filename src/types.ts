@@ -23,6 +23,9 @@ export interface SystemConfig {
   senderName: string;
   isConfigured: boolean;
   firstUserRegistered: boolean;
+  isAuthorized?: boolean;
+  accessToken?: string;
+  authorizedAt?: string;
   configuredAt?: string;
 }
 

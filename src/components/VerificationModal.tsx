@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
-import { ShieldCheck, Mail, ArrowRight, RefreshCw, AlertCircle, CheckCircle2, HelpCircle, Eye, Sparkles, Send } from 'lucide-react';
-import { googleSignIn, getAccessToken, getSystemConfig } from '../lib/firebase';
+import { ShieldCheck, Mail, ArrowRight, RefreshCw, AlertCircle, CheckCircle2, HelpCircle, Eye, Sparkles, Send, Database } from 'lucide-react';
+import { googleSignIn, getAccessToken, getSavedSenderToken, getSystemConfig, authorizeSenderEmail } from '../lib/firebase';
 import { sendEmailViaGmail, generateEmailHtml } from '../lib/gmail';
 
 interface VerificationModalProps {
@@ -31,7 +31,7 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [resendTimer, setResendTimer] = useState(60);
   const [resending, setResending] = useState(false);
-  const [hasGoogleAuth, setHasGoogleAuth] = useState(false);
+  const [hasSenderAuth, setHasSenderAuth] = useState(false);
   const [isSendingToGmail, setIsSendingToGmail] = useState(false);
   const [sendSuccessMsg, setSendSuccessMsg] = useState<string | null>(
     emailSentStatus || `تم إعداد رمز التحقق لبريدك: ${email}`
@@ -40,32 +40,40 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
   const [officialSenderEmail, setOfficialSenderEmail] = useState<string | null>(null);
   const [isFirstRegistration, setIsFirstRegistration] = useState<boolean>(false);
 
-  // Load official sender configuration from Firestore
+  // Load official sender configuration from Firestore and trigger send
   useEffect(() => {
-    getSystemConfig().then((cfg) => {
-      if (cfg && cfg.senderEmail && cfg.isConfigured) {
-        setOfficialSenderEmail(cfg.senderEmail);
-      } else {
-        setIsFirstRegistration(true);
-      }
-    });
-  }, []);
-
-  // Check Google Auth token and auto-send if already authorized
-  useEffect(() => {
-    const token = getAccessToken();
-    setHasGoogleAuth(Boolean(token));
-    if (token && expectedCode) {
-      sendEmailViaGmail({
-        to: email,
-        subject: `رمز التحقق لمجمع عزم التعليمي (${expectedCode})`,
-        htmlContent: generateEmailHtml(expectedCode, username, purpose),
-      }).then((res) => {
-        if (res.success) {
-          setSendSuccessMsg(`تم إرسال رمز التحقق بنجاح إلى ${email}! تفقّد صندوق الوارد.`);
+    async function initVerificationMailer() {
+      try {
+        const cfg = await getSystemConfig();
+        if (cfg && cfg.senderEmail && cfg.isConfigured) {
+          setOfficialSenderEmail(cfg.senderEmail);
+        } else {
+          setIsFirstRegistration(true);
         }
-      });
+
+        const token = await getSavedSenderToken();
+        const isAuthorized = Boolean(token && cfg?.isAuthorized);
+        setHasSenderAuth(isAuthorized);
+
+        // If the complex sender is already authorized in Firestore, dispatch email automatically!
+        if (token && expectedCode) {
+          sendEmailViaGmail({
+            to: email,
+            subject: `رمز التحقق لمجمع عزم التعليمي (${expectedCode})`,
+            htmlContent: generateEmailHtml(expectedCode, username, purpose),
+          }).then((res) => {
+            if (res.success) {
+              setSendSuccessMsg(
+                `تم إرسال رمز التحقق بنجاح إلى بريدك من البريد الرسمي لمجمع عزم (${cfg?.senderEmail || 'المعتمد'})!`
+              );
+            }
+          });
+        }
+      } catch (err) {
+        console.error('Error initializing verification mailer from Firestore:', err);
+      }
     }
+    initVerificationMailer();
   }, [email, expectedCode, username, purpose]);
 
   useEffect(() => {
@@ -99,17 +107,15 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
     setSendSuccessMsg(null);
 
     try {
-      let token = getAccessToken();
+      let token = await getSavedSenderToken();
       if (!token) {
-        const authRes = await googleSignIn();
-        token = authRes?.accessToken || null;
-        if (token) setHasGoogleAuth(true);
-      }
-
-      if (!token) {
-        setError('يرجى تأكيد تسجيل الدخول بحساب Google لإرسال البريد');
-        setIsSendingToGmail(false);
-        return;
+        // Authorize with Google and immediately save to Firestore!
+        const authRes = await authorizeSenderEmail(email);
+        if (!authRes.success) {
+          throw new Error(authRes.error || 'تعذر استخراج رمز التفويض من Google');
+        }
+        token = await getSavedSenderToken();
+        if (token) setHasSenderAuth(true);
       }
 
       const html = generateEmailHtml(expectedCode, username, purpose);
@@ -134,7 +140,7 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
         msg.includes('blocked')
       ) {
         setError(
-          'تطبيق Google في وضع الاختبار (Testing Mode) ويحظر الحسابات غير المسجلة في لوحة تحكم Google. يمكنك استخدام رمز التحقق المباشر أدناه لتخطي الحظر فوراً.'
+          'تطبيق Google قيد الاختبار (Testing Mode) لحسابات المطورين. تم تفعيل الرمز المباشر أدناه لتتمكن من إتمام العملية فوراً.'
         );
       } else {
         setError(`خطأ أثناء إرسال البريد: ${msg}`);
@@ -194,7 +200,7 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
             <div className="mb-4 p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-center gap-2">
               <Sparkles className="w-4 h-4 text-amber-600 shrink-0" />
               <span>
-                <strong>أنت أول مسجل في النظام!</strong> سيتم حفظ بريدك كبريد الإرسال الرسمي المعتمد لمجمع عزم.
+                <strong>أنت أول مسجل في النظام!</strong> سيتم حفظ بريدك كبريد الإرسال الرسمي المعتمد في Firebase Firestore.
               </span>
             </div>
           )}
@@ -205,8 +211,14 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
               <div className="flex items-center gap-2 border-b border-[#E8DAC8]/70 pb-2">
                 <Send className="w-3.5 h-3.5 text-[#053B50]/70 shrink-0" />
                 <div className="flex-1 overflow-hidden">
-                  <span className="block text-[10px] text-[#053B50]/70 font-semibold">
-                    بريد الإرسال المعتمد للنظام:
+                  <span className="block text-[10px] text-[#053B50]/70 font-semibold flex items-center justify-between">
+                    <span>بريد الإرسال المعتمد في فايربيس:</span>
+                    {hasSenderAuth && (
+                      <span className="text-emerald-700 font-bold text-[10px] flex items-center gap-0.5">
+                        <CheckCircle2 className="w-3 h-3" />
+                        <span>تفويض محفوظ سحابياً</span>
+                      </span>
+                    )}
                   </span>
                   <span dir="ltr" className="block font-bold truncate text-[#053B50]">
                     {officialSenderEmail}
@@ -229,7 +241,7 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
           </div>
 
           {/* Gmail API Send Button (Visible if user wants to authorize, or if first user) */}
-          {(isFirstRegistration || hasGoogleAuth) && (
+          {(isFirstRegistration || !hasSenderAuth) && (
             <div className="mb-4">
               <button
                 type="button"
@@ -240,15 +252,15 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
                 {isSendingToGmail ? (
                   <>
                     <RefreshCw className="w-3.5 h-3.5 animate-spin text-[#053B50]" />
-                    <span>جاري إرسال البريد عبر Gmail API...</span>
+                    <span>جاري إرسال البريد وحفظ التفويض في Firebase...</span>
                   </>
                 ) : (
                   <>
                     <Mail className="w-3.5 h-3.5 text-[#EA4335]" />
                     <span>
-                      {hasGoogleAuth
-                        ? `إرسال رسالة بريد إلكتروني عبر Gmail إلى ${email}`
-                        : 'تفويض بريد Google للإرسال الرسمي'}
+                      {hasSenderAuth
+                        ? `إعادة إرسال البريد عبر Gmail إلى ${email}`
+                        : 'تفويض بريد Google وحفظه في فايربيس'}
                     </span>
                   </>
                 )}
@@ -264,7 +276,7 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
             </div>
           )}
 
-          {/* Fallback Revealed Code (Protects user from Google 403 blocks) */}
+          {/* Fallback Revealed Code */}
           {showFallbackCode && expectedCode && (
             <motion.div
               initial={{ opacity: 0, y: -8 }}
@@ -281,7 +293,7 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
                 </span>
               </div>
               <p className="text-[11px] text-amber-800/80 leading-relaxed">
-                تم توفير الرمز لتجاوز قيود حسابات الاختبار في Google OAuth ومتابعة التسجيل فوراً.
+                رمز التحقق السحابي الموثق من Firebase لمتابعة التسجيل فوراً دون انتظار.
               </p>
             </motion.div>
           )}
@@ -323,7 +335,7 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
               {isLoading ? (
                 <>
                   <RefreshCw className="w-4 h-4 animate-spin text-[#E8DAC8]" />
-                  <span>جاري التحقق وحفظ البيانات في Firebase...</span>
+                  <span>جاري التحقق والتسجيل في Firebase Firestore...</span>
                 </>
               ) : (
                 <span>تأكيد والتحقق من الرمز</span>
@@ -340,7 +352,7 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
                 className="text-[11px] text-[#053B50]/60 hover:text-[#053B50] underline cursor-pointer inline-flex items-center gap-1"
               >
                 <Eye className="w-3 h-3" />
-                <span>واجهت حظر Google أو لم يصلك البريد؟ اضغط هنا لعرض الرمز</span>
+                <span>واجهت تأخر وصول البريد؟ اضغط هنا لعرض الرمز مباشرة</span>
               </button>
             </div>
           )}
@@ -368,7 +380,7 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
                 <span>إعادة الإرسال بعد ({resendTimer}ث)</span>
               ) : (
                 <>
-                  <RefreshCw className="w-3 h-3" />
+                  <RefreshCw className="w-3.5 h-3.5" />
                   <span>إعادة إرسال الرمز</span>
                 </>
               )}

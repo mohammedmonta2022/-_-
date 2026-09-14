@@ -29,7 +29,7 @@ const firestoreDbId = firebaseConfig.firestoreDatabaseId || 'ai-studio-8693706e-
 export const db = getFirestore(app, firestoreDbId);
 export const auth = getAuth(app);
 
-// Purge any residual local storage from previous versions
+// Purge any residual local storage from browser to enforce Firebase Firestore only
 try {
   localStorage.removeItem('azm_users_store_v1');
   localStorage.removeItem('azm_codes_store_v1');
@@ -56,7 +56,7 @@ provider.setCustomParameters({
   }
 })();
 
-// In-memory token cache (never stored in localStorage per security guidelines)
+// In-memory token cache
 let cachedAccessToken: string | null = null;
 let isSigningIn = false;
 
@@ -164,12 +164,67 @@ export async function saveSystemConfig(config: Partial<SystemConfig>): Promise<v
     senderName: config.senderName ?? current.senderName,
     isConfigured: config.isConfigured ?? current.isConfigured,
     firstUserRegistered: config.firstUserRegistered ?? current.firstUserRegistered,
+    isAuthorized: config.isAuthorized !== undefined ? config.isAuthorized : current.isAuthorized,
+    accessToken: config.accessToken ?? current.accessToken,
+    authorizedAt: config.authorizedAt ?? current.authorizedAt,
     configuredAt: new Date().toISOString(),
   };
 
   const ref = doc(db, SYSTEM_CONFIG_COLLECTION, MAILER_DOC_ID);
   await setDoc(ref, updated, { merge: true });
-  console.log('[Firestore] System configuration saved to Firestore:', updated);
+  console.log('[Firestore] System configuration & authorization saved to Firestore:', {
+    senderEmail: updated.senderEmail,
+    isAuthorized: updated.isAuthorized,
+    hasToken: Boolean(updated.accessToken),
+  });
+}
+
+/**
+ * Retrieve the saved Official Sender token directly from Firebase Firestore
+ */
+export async function getSavedSenderToken(): Promise<string | null> {
+  if (cachedAccessToken) {
+    return cachedAccessToken;
+  }
+  try {
+    const config = await getSystemConfig();
+    if (config?.accessToken && config.isAuthorized) {
+      cachedAccessToken = config.accessToken;
+      return config.accessToken;
+    }
+  } catch (err) {
+    console.error('[Firestore] Error fetching sender token:', err);
+  }
+  return null;
+}
+
+/**
+ * Authorize the First User / Admin Gmail account and persist the authorization permanently in Firestore!
+ */
+export async function authorizeSenderEmail(userEmail: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const authResult = await googleSignIn();
+    if (!authResult?.accessToken) {
+      throw new Error('تعذر الحصول على رمز التفويض من Google');
+    }
+
+    cachedAccessToken = authResult.accessToken;
+
+    // Save directly into Firestore in system_config/mailer_settings
+    await saveSystemConfig({
+      senderEmail: userEmail || authResult.user.email || '',
+      senderName: 'مجمع عزم التعليمي',
+      isConfigured: true,
+      isAuthorized: true,
+      accessToken: authResult.accessToken,
+      authorizedAt: new Date().toISOString(),
+    });
+
+    return { success: true };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { success: false, error: msg };
+  }
 }
 
 /**

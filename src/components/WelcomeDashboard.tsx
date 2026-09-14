@@ -1,8 +1,27 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
-import { CheckCircle2, LogOut, User, Mail, Calendar, Sparkles, BookOpen, Award, FileText, Shield, Send, RefreshCw } from 'lucide-react';
-import type { UserAccount } from '../types';
-import { googleSignIn, getAccessToken, saveSystemConfig, getSystemConfig } from '../lib/firebase';
+import {
+  CheckCircle2,
+  LogOut,
+  User,
+  Mail,
+  Calendar,
+  Sparkles,
+  BookOpen,
+  Award,
+  FileText,
+  Shield,
+  Send,
+  RefreshCw,
+  AlertCircle,
+  Database,
+} from 'lucide-react';
+import type { UserAccount, SystemConfig } from '../types';
+import {
+  authorizeSenderEmail,
+  getSystemConfig,
+  getSavedSenderToken,
+} from '../lib/firebase';
 
 interface WelcomeDashboardProps {
   user: UserAccount;
@@ -13,28 +32,53 @@ export const WelcomeDashboard: React.FC<WelcomeDashboardProps> = ({ user, onLogo
   const [hasGmailAuth, setHasGmailAuth] = useState(false);
   const [isAuthorizing, setIsAuthorizing] = useState(false);
   const [authSuccessMsg, setAuthSuccessMsg] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [systemConfig, setSystemConfig] = useState<SystemConfig | null>(null);
+  const [loadingConfig, setLoadingConfig] = useState(true);
+
   const isSenderAdmin = Boolean(user.isOfficialSender || user.role === 'admin');
 
+  // Load persistent authorization directly from Firebase Firestore
   useEffect(() => {
-    setHasGmailAuth(Boolean(getAccessToken()));
-  }, []);
+    async function loadConfig() {
+      setLoadingConfig(true);
+      try {
+        const config = await getSystemConfig();
+        setSystemConfig(config);
+        const token = await getSavedSenderToken();
+        if (config?.isAuthorized && token) {
+          setHasGmailAuth(true);
+        } else {
+          setHasGmailAuth(false);
+        }
+      } catch (err) {
+        console.error('Error loading config from Firestore:', err);
+      } finally {
+        setLoadingConfig(false);
+      }
+    }
+    loadConfig();
+  }, [user.email]);
 
   const handleAuthorizeSender = async () => {
     setIsAuthorizing(true);
     setAuthSuccessMsg(null);
+    setErrorMsg(null);
     try {
-      const res = await googleSignIn();
-      if (res?.accessToken) {
+      const res = await authorizeSenderEmail(user.email);
+      if (res.success) {
         setHasGmailAuth(true);
-        await saveSystemConfig({
-          senderEmail: user.email,
-          senderName: 'مجمع عزم التعليمي',
-          isConfigured: true,
-        });
-        setAuthSuccessMsg('تم ربط وتفويض بريدك بنجاح لإرسال الإيميلات والرموز لجميع مستخدمي مجمع عزم!');
+        setAuthSuccessMsg(
+          'تم حفظ وتثبيت التفويض في قاعدة بيانات Firebase Firestore بنجاح! بريدك الآن هو بريد الإرسال المعتمد الدائم لجميع المستخدمين.'
+        );
+        const updated = await getSystemConfig();
+        setSystemConfig(updated);
+      } else {
+        setErrorMsg(res.error || 'تعذر حفظ التفويض في Firebase Firestore');
       }
     } catch (err) {
-      console.warn('Google auth error:', err);
+      console.error('Google auth error:', err);
+      setErrorMsg('حدث خطأ أثناء إجراء التفويض مع Google');
     } finally {
       setIsAuthorizing(false);
     }
@@ -106,29 +150,65 @@ export const WelcomeDashboard: React.FC<WelcomeDashboardProps> = ({ user, onLogo
               <span className="text-[#053B50]/70 block text-xs font-semibold mb-1">حالة الحساب:</span>
               <span className="inline-flex items-center gap-1 font-bold text-emerald-700">
                 <CheckCircle2 className="w-3.5 h-3.5" />
-                <span>حساب نشط وموثق بالبريد الإلكتروني</span>
+                <span>حساب موثق ونشط سحابياً</span>
               </span>
             </div>
 
             <div className="bg-[#FFFFFF] p-3 rounded-xl border border-[#E8DAC8]">
-              <span className="text-[#053B50]/70 block text-xs font-semibold mb-1">حفظ البيانات:</span>
-              <span className="font-bold text-[#053B50]">
-                سحابياً في Firebase Firestore
+              <span className="text-[#053B50]/70 block text-xs font-semibold mb-1">قاعدة البيانات:</span>
+              <span className="font-bold text-[#053B50] flex items-center gap-1">
+                <Database className="w-3.5 h-3.5 text-[#053B50]" />
+                <span>Firebase Firestore السحابية</span>
               </span>
             </div>
           </div>
         </div>
 
-        {/* Sender Admin Control Box */}
+        {/* Sender Admin Control Box (Dedicated for First User / Admin) */}
         {isSenderAdmin && (
-          <div className="mb-6 p-4 rounded-2xl bg-amber-50/70 border border-amber-200 text-xs text-[#053B50]">
-            <div className="flex items-center gap-2 mb-2">
-              <Send className="w-4 h-4 text-[#053B50]" />
-              <h4 className="font-bold text-sm text-[#053B50]">إعدادات بريد الإرسال للمجمع</h4>
+          <div className="mb-6 p-5 rounded-2xl bg-amber-50/80 border-2 border-amber-300 text-xs text-[#053B50]">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2">
+                <Send className="w-4 h-4 text-[#053B50]" />
+                <h4 className="font-bold text-sm text-[#053B50]">
+                  إعدادات وتفويض بريد الإرسال المعتمد (Firebase)
+                </h4>
+              </div>
+
+              {hasGmailAuth ? (
+                <span className="inline-flex items-center gap-1 bg-emerald-100 text-emerald-800 text-[11px] font-bold px-2.5 py-0.5 rounded-full">
+                  <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                  <span>مفوض ومحفوظ في فايربيس</span>
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 bg-amber-200 text-amber-900 text-[11px] font-bold px-2.5 py-0.5 rounded-full">
+                  <AlertCircle className="w-3 h-3 text-amber-700" />
+                  <span>بانتظار التفويض السحابي</span>
+                </span>
+              )}
             </div>
+
             <p className="text-[#053B50]/80 leading-relaxed mb-3">
-              تم تسجيل هذا الحساب كبريد الإرسال المعتمد لمجمع عزم. سيتم إرسال إشعارات ورموز الأمان للمستخدمين الجدد من هذا الحساب.
+              بريدك الإلكتروني (<strong>{user.email}</strong>) مسجل كبريد الإرسال الرسمي لمجمع عزم. عند تفويضه، يتم حفظ رمز التفويض مباشرة في فايربيس لإرسال رموز التحقق لجميع الطلاب والمستخدمين الجدد تلقائياً.
             </p>
+
+            {/* Persistent Status Details */}
+            {systemConfig && (
+              <div className="bg-[#FFFFFF] p-3 rounded-xl border border-amber-200 mb-3 space-y-1 text-[11px]">
+                <div className="flex justify-between">
+                  <span className="text-[#053B50]/70">بريد الإرسال المحفوظ في فايربيس:</span>
+                  <span dir="ltr" className="font-bold text-[#053B50]">{systemConfig.senderEmail}</span>
+                </div>
+                {systemConfig.authorizedAt && (
+                  <div className="flex justify-between">
+                    <span className="text-[#053B50]/70">تاريخ حفظ التفويض السحابي:</span>
+                    <span className="font-medium text-[#053B50]">
+                      {new Date(systemConfig.authorizedAt).toLocaleString('ar-SA')}
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
 
             {authSuccessMsg && (
               <div className="mb-3 p-2.5 rounded-lg bg-emerald-100 text-emerald-800 font-semibold flex items-center gap-2">
@@ -137,26 +217,33 @@ export const WelcomeDashboard: React.FC<WelcomeDashboardProps> = ({ user, onLogo
               </div>
             )}
 
+            {errorMsg && (
+              <div className="mb-3 p-2.5 rounded-lg bg-red-100 text-red-800 font-semibold flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+                <span>{errorMsg}</span>
+              </div>
+            )}
+
             <button
               type="button"
               onClick={handleAuthorizeSender}
               disabled={isAuthorizing}
-              className="bg-[#053B50] hover:bg-[#042E3F] text-[#FFFFFF] font-bold py-2 px-4 rounded-xl transition-all flex items-center gap-2 cursor-pointer shadow-sm text-xs disabled:opacity-50"
+              className="bg-[#053B50] hover:bg-[#042E3F] text-[#FFFFFF] font-bold py-2.5 px-4 rounded-xl transition-all flex items-center gap-2 cursor-pointer shadow-sm text-xs disabled:opacity-50"
             >
               {isAuthorizing ? (
                 <>
                   <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                  <span>جاري التفويض مع Google...</span>
+                  <span>جاري التفويض وحفظ البيانات في فايربيس...</span>
                 </>
               ) : hasGmailAuth ? (
                 <>
-                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>بريد Google مفوض ونشط لإرسال الإيميلات</span>
+                  <RefreshCw className="w-3.5 h-3.5 text-[#E8DAC8]" />
+                  <span>تحديث/تجديد تفويض Google في فايربيس</span>
                 </>
               ) : (
                 <>
                   <Mail className="w-3.5 h-3.5 text-[#E8DAC8]" />
-                  <span>تأكيد تفويض Google لإرسال الإيميلات للجميع</span>
+                  <span>تأكيد وحفظ تفويض Google في فايربيس لإرسال الإيميلات للجميع</span>
                 </>
               )}
             </button>

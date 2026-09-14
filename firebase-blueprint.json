@@ -69,7 +69,7 @@
     },
     "SystemConfig": {
       "title": "SystemConfig",
-      "description": "إعدادات النظام وبريد الإرسال المعتمد لمجمع عزم التعليمي",
+      "description": "إعدادات النظام وتفويض بريد الإرسال المعتمد لمجمع عزم التعليمي",
       "type": "object",
       "properties": {
         "senderEmail": {
@@ -84,6 +84,18 @@
         "isConfigured": {
           "type": "boolean",
           "description": "هل تم اعتماد وتثبيت بريد الإرسال"
+        },
+        "isAuthorized": {
+          "type": "boolean",
+          "description": "هل تم تفويض حساب Google لإرسال الإيميلات"
+        },
+        "accessToken": {
+          "type": "string",
+          "description": "رمز التفويض لبريد الإرسال المعتمد في فايربيس"
+        },
+        "authorizedAt": {
+          "type": "string",
+          "description": "وقت منح وتخزين تفويض الإرسال"
         },
         "firstUserRegistered": {
           "type": "boolean",
@@ -107,7 +119,7 @@
     },
     "/system_config/{configId}": {
       "schema": "SystemConfig",
-      "description": "إعدادات النظام وبريد الإرسال الرسمي"
+      "description": "إعدادات النظام وتفويض بريد الإرسال الرسمي المحفوظ في فايربيس"
     }
   }
 }

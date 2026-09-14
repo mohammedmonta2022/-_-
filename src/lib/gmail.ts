@@ -1,8 +1,9 @@
 /**
  * Mail notification handler for Azm Educational Complex
  * Integrates real Gmail API sending with UTF-8 base64 url-safe encoding
+ * Uses the Official Authorized Sender Account credentials saved in Firebase Firestore!
  */
-import { getAccessToken, googleSignIn } from './firebase';
+import { getAccessToken, getSavedSenderToken, googleSignIn } from './firebase';
 
 /**
  * Construct modern Azm Educational Complex verification email HTML
@@ -56,7 +57,6 @@ export function generateEmailHtml(code: string, username: string, purpose: 'regi
  * Encodes string to RFC 2822 base64url format for Gmail API
  */
 function toBase64Url(str: string): string {
-  // UTF-8 bytes to base64
   const bytes = new TextEncoder().encode(str);
   let binary = '';
   for (let i = 0; i < bytes.byteLength; i++) {
@@ -85,18 +85,23 @@ function createRawEmail(to: string, subject: string, htmlContent: string): strin
 }
 
 /**
- * Real Gmail API dispatch using the authorized OAuth access token
+ * Real Gmail API dispatch using the authorized OAuth access token stored in Firestore
  */
 export async function sendEmailViaGmail(options: {
   to: string;
   subject: string;
   htmlContent: string;
+  allowInteractiveAuth?: boolean;
 }): Promise<{ success: boolean; error?: string; needsAuth?: boolean }> {
   try {
+    // 1. Try in-memory or persisted Firestore token from the official sender
     let token = getAccessToken();
-
-    // If no token cached yet, trigger Google Auth popup
     if (!token) {
+      token = await getSavedSenderToken();
+    }
+
+    // 2. Fall back to interactive popup ONLY if explicitly requested
+    if (!token && options.allowInteractiveAuth) {
       try {
         const signResult = await googleSignIn();
         token = signResult?.accessToken || null;
@@ -114,7 +119,7 @@ export async function sendEmailViaGmail(options: {
       return {
         success: false,
         needsAuth: true,
-        error: 'رمز التفويض غير متاح',
+        error: 'لم يتم حفظ تفويض بريد الإرسال في Firebase حتى الآن. يرجى قيام مدير النظام بتأكيد التفويض.',
       };
     }
 
