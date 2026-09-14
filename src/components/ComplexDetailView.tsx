@@ -10,6 +10,10 @@ import {
   Sparkles,
   ArrowRight,
   UserCheck,
+  Pencil,
+  Trash2,
+  Plus,
+  ArrowLeftRight,
 } from 'lucide-react';
 import type { QuranComplex, QuranCircle, RecitationRecord, UserAccount } from '../types';
 import { AnimatedCounter } from './AnimatedCounter';
@@ -24,6 +28,12 @@ interface ComplexDetailViewProps {
   onSelectCircle: (circle: QuranCircle) => void;
   onSelectStudent: (student: UserAccount) => void;
   onBack: () => void;
+  onEditComplex?: (complex: QuranComplex) => void;
+  onDeleteComplex?: (complex: QuranComplex) => void;
+  onAddCircle?: (complex: QuranComplex) => void;
+  onEditCircle?: (circle: QuranCircle) => void;
+  onMoveCircle?: (circle: QuranCircle) => void;
+  onDeleteCircle?: (circle: QuranCircle) => void;
 }
 
 export const ComplexDetailView: React.FC<ComplexDetailViewProps> = ({
@@ -35,6 +45,12 @@ export const ComplexDetailView: React.FC<ComplexDetailViewProps> = ({
   onSelectCircle,
   onSelectStudent,
   onBack,
+  onEditComplex,
+  onDeleteComplex,
+  onAddCircle,
+  onEditCircle,
+  onMoveCircle,
+  onDeleteCircle,
 }) => {
   const complexCircles = circles.filter((c) => c.complexId === complex.id);
   const complexCircleIds = new Set(complexCircles.map((c) => c.id));
@@ -133,7 +149,7 @@ export const ComplexDetailView: React.FC<ComplexDetailViewProps> = ({
             </div>
           </div>
 
-          <div className="flex gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             {complex.latitude && complex.longitude && (
               <a
                 href={`https://www.google.com/maps?q=${complex.latitude},${complex.longitude}`}
@@ -144,6 +160,30 @@ export const ComplexDetailView: React.FC<ComplexDetailViewProps> = ({
                 <MapPin className="w-3.5 h-3.5" />
                 <span>عرض على خرائط جوجل</span>
               </a>
+            )}
+
+            {onEditComplex && (
+              <button
+                type="button"
+                onClick={() => onEditComplex(complex)}
+                className="bg-[#F7F3EE] hover:bg-[#E8DAC8] text-[#053B50] text-xs font-bold px-3 py-2 rounded-xl border border-[#E8DAC8] flex items-center gap-1.5 transition-colors cursor-pointer"
+                title="تعديل بيانات المجمع"
+              >
+                <Pencil className="w-3.5 h-3.5" />
+                <span>تعديل المجمع</span>
+              </button>
+            )}
+
+            {onDeleteComplex && (
+              <button
+                type="button"
+                onClick={() => onDeleteComplex(complex)}
+                className="bg-red-50 hover:bg-red-100 text-red-700 text-xs font-bold px-3 py-2 rounded-xl border border-red-200 flex items-center gap-1.5 transition-colors cursor-pointer"
+                title="حذف المجمع"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>حذف المجمع</span>
+              </button>
             )}
           </div>
         </div>
@@ -246,12 +286,25 @@ export const ComplexDetailView: React.FC<ComplexDetailViewProps> = ({
 
       {/* Circles List Under This Complex */}
       <div className="bg-[#FFFFFF] border-2 border-[#E8DAC8] rounded-2xl p-6 shadow-xs">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="font-bold text-base text-[#053B50] flex items-center gap-2">
-            <BookOpen className="w-5 h-5 text-[#053B50]" />
-            <span>حلقات المجمع ({complexCircles.length} حلقة):</span>
-          </h3>
-          <span className="text-xs text-[#053B50]/70">انقر على أي حلقة لعرض سجل إنجازها اليومي والطلبة</span>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+          <div>
+            <h3 className="font-bold text-base text-[#053B50] flex items-center gap-2">
+              <BookOpen className="w-5 h-5 text-[#053B50]" />
+              <span>حلقات المجمع ({complexCircles.length} حلقة):</span>
+            </h3>
+            <span className="text-xs text-[#053B50]/70">انقر على أي حلقة لعرض سجل إنجازها اليومي والطلبة</span>
+          </div>
+
+          {onAddCircle && (
+            <button
+              type="button"
+              onClick={() => onAddCircle(complex)}
+              className="bg-[#053B50] hover:bg-[#042E3F] text-[#FFFFFF] text-xs font-bold px-3.5 py-2 rounded-xl flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer self-start sm:self-auto"
+            >
+              <Plus className="w-3.5 h-3.5 text-[#E8DAC8]" />
+              <span>إضافة حلقة جديدة للمجمع</span>
+            </button>
+          )}
         </div>
 
         {complexCircles.length === 0 ? (
@@ -269,25 +322,78 @@ export const ComplexDetailView: React.FC<ComplexDetailViewProps> = ({
                 <div
                   key={circle.id}
                   onClick={() => onSelectCircle(circle)}
-                  className="bg-[#F7F3EE] hover:bg-[#FFFFFF] border-2 border-[#E8DAC8] hover:border-[#053B50] p-4 rounded-xl cursor-pointer transition-all shadow-2xs group"
+                  className="bg-[#F7F3EE] hover:bg-[#FFFFFF] border-2 border-[#E8DAC8] hover:border-[#053B50] p-4 rounded-xl cursor-pointer transition-all shadow-2xs group flex flex-col justify-between"
                 >
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <h4 className="font-black text-sm text-[#053B50] group-hover:text-[#053B50]">
-                        {circle.name}
-                      </h4>
-                      <p className="text-xs text-[#053B50]/70 mt-0.5">
-                        المعلم: {circle.teacherName || 'لم يعين معلم بعد'}
-                      </p>
+                  <div>
+                    <div className="flex items-start justify-between">
+                      <div>
+                        <h4 className="font-black text-sm text-[#053B50] group-hover:text-[#053B50]">
+                          {circle.name}
+                        </h4>
+                        <p className="text-xs text-[#053B50]/70 mt-0.5">
+                          المعلم: {circle.teacherName || 'لم يعين معلم بعد'}
+                        </p>
+                      </div>
+                      <ChevronRight className="w-4 h-4 text-[#053B50]/40 group-hover:text-[#053B50] rotate-180 transition-transform" />
                     </div>
-                    <ChevronRight className="w-4 h-4 text-[#053B50]/40 group-hover:text-[#053B50] rotate-180 transition-transform" />
+
+                    <div className="mt-3 pt-3 border-t border-[#E8DAC8] flex items-center justify-between text-xs">
+                      <span className="text-[#053B50]/80">إنجاز اليوم:</span>
+                      <span className="font-bold text-[#053B50] font-mono">
+                        {cPages} أوجه ({cVerses} آية)
+                      </span>
+                    </div>
                   </div>
 
-                  <div className="mt-3 pt-3 border-t border-[#E8DAC8] flex items-center justify-between text-xs">
-                    <span className="text-[#053B50]/80">إنجاز اليوم:</span>
-                    <span className="font-bold text-[#053B50] font-mono">
-                      {cPages} أوجه ({cVerses} آية)
-                    </span>
+                  {/* Circle Management Action Buttons */}
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    className="mt-3 pt-2 border-t border-[#E8DAC8]/70 flex items-center justify-end gap-1.5"
+                  >
+                    {onEditCircle && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onEditCircle(circle);
+                        }}
+                        className="p-1.5 text-xs text-[#053B50] hover:bg-[#E8DAC8] rounded-lg border border-[#E8DAC8] transition-colors cursor-pointer flex items-center gap-1"
+                        title="تعديل بيانات الحلقة"
+                      >
+                        <Pencil className="w-3 h-3" />
+                        <span className="text-[10px] font-bold">تعديل</span>
+                      </button>
+                    )}
+
+                    {onMoveCircle && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onMoveCircle(circle);
+                        }}
+                        className="p-1.5 text-xs text-[#053B50] hover:bg-[#E8DAC8] rounded-lg border border-[#E8DAC8] transition-colors cursor-pointer flex items-center gap-1"
+                        title="نقل الحلقة لمجمع آخر"
+                      >
+                        <ArrowLeftRight className="w-3 h-3" />
+                        <span className="text-[10px] font-bold">نقل</span>
+                      </button>
+                    )}
+
+                    {onDeleteCircle && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onDeleteCircle(circle);
+                        }}
+                        className="p-1.5 text-xs text-red-600 hover:bg-red-100 rounded-lg border border-red-200 transition-colors cursor-pointer flex items-center gap-1"
+                        title="حذف الحلقة"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                        <span className="text-[10px] font-bold">حذف</span>
+                      </button>
+                    )}
                   </div>
                 </div>
               );

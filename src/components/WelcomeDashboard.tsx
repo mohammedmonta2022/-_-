@@ -30,6 +30,11 @@ import {
   updateUserAccount,
   saveSystemConfig,
   seedInitialQuranDataIfEmpty,
+  updateComplex,
+  deleteComplex,
+  updateCircle,
+  deleteCircle,
+  moveCircle,
 } from '../lib/firebase';
 import { HomeDashboardTab } from './HomeDashboardTab';
 import { ComplexesAndCirclesTab } from './ComplexesAndCirclesTab';
@@ -141,6 +146,30 @@ export const WelcomeDashboard: React.FC<WelcomeDashboardProps> = ({ user, onLogo
     setComplexes(updatedComps);
   };
 
+  // Complex Update
+  const handleUpdateComplex = async (
+    complexId: string,
+    data: { name: string; locationName: string; latitude?: number; longitude?: number }
+  ) => {
+    await updateComplex(complexId, data);
+    const [cList, uList] = await Promise.all([getComplexes(), getAllUsers()]);
+    setComplexes(cList);
+    setUsersList(uList);
+  };
+
+  // Complex Delete
+  const handleDeleteComplex = async (complexId: string) => {
+    await deleteComplex(complexId);
+    const [cList, cirList, uList] = await Promise.all([
+      getComplexes(),
+      getCircles(),
+      getAllUsers(),
+    ]);
+    setComplexes(cList);
+    setCircles(cirList);
+    setUsersList(uList);
+  };
+
   // Circle Creation
   const handleAddCircle = async (
     complexId: string,
@@ -151,6 +180,37 @@ export const WelcomeDashboard: React.FC<WelcomeDashboardProps> = ({ user, onLogo
     await addCircle(complexId, name, teacherId, teacherName);
     const updatedCircs = await getCircles();
     setCircles(updatedCircs);
+  };
+
+  // Circle Update
+  const handleUpdateCircle = async (
+    circleId: string,
+    data: { name: string; teacherId?: string; teacherName?: string }
+  ) => {
+    await updateCircle(circleId, data);
+    const [cirList, uList] = await Promise.all([getCircles(), getAllUsers()]);
+    setCircles(cirList);
+    setUsersList(uList);
+  };
+
+  // Circle Delete
+  const handleDeleteCircle = async (circleId: string) => {
+    await deleteCircle(circleId);
+    const [cirList, uList] = await Promise.all([getCircles(), getAllUsers()]);
+    setCircles(cirList);
+    setUsersList(uList);
+  };
+
+  // Circle Move between complexes
+  const handleMoveCircle = async (
+    circleId: string,
+    targetComplexId: string,
+    targetComplexName: string
+  ) => {
+    await moveCircle(circleId, targetComplexId, targetComplexName);
+    const [cirList, uList] = await Promise.all([getCircles(), getAllUsers()]);
+    setCircles(cirList);
+    setUsersList(uList);
   };
 
   // Recitation Creation
@@ -364,6 +424,11 @@ export const WelcomeDashboard: React.FC<WelcomeDashboardProps> = ({ user, onLogo
           onAddComplex={handleAddComplex}
           onAddCircle={handleAddCircle}
           onAddRecitation={handleAddRecitation}
+          onUpdateComplex={handleUpdateComplex}
+          onDeleteComplex={handleDeleteComplex}
+          onUpdateCircle={handleUpdateCircle}
+          onDeleteCircle={handleDeleteCircle}
+          onMoveCircle={handleMoveCircle}
         />
       )}
 

@@ -10,12 +10,19 @@ import {
   Calendar,
   Layers,
   Sparkles,
+  Pencil,
+  Trash2,
+  ArrowLeftRight,
 } from 'lucide-react';
 import type { QuranComplex, QuranCircle, RecitationRecord, UserAccount } from '../types';
 import { GoogleMapPicker } from './GoogleMapPicker';
 import { ComplexDetailView } from './ComplexDetailView';
 import { CircleDetailView } from './CircleDetailView';
 import { StudentDetailModal } from './StudentDetailModal';
+import { EditComplexModal } from './EditComplexModal';
+import { EditCircleModal } from './EditCircleModal';
+import { MoveCircleModal } from './MoveCircleModal';
+import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 
 interface ComplexesAndCirclesTabProps {
   complexes: QuranComplex[];
@@ -27,6 +34,11 @@ interface ComplexesAndCirclesTabProps {
   onAddComplex: (name: string, locationName: string, lat?: number, lng?: number) => Promise<void>;
   onAddCircle: (complexId: string, name: string, teacherId?: string, teacherName?: string) => Promise<void>;
   onAddRecitation: (recitation: Omit<RecitationRecord, 'id' | 'createdAt'>) => Promise<void>;
+  onUpdateComplex?: (complexId: string, data: { name: string; locationName: string; latitude?: number; longitude?: number }) => Promise<void>;
+  onDeleteComplex?: (complexId: string) => Promise<void>;
+  onUpdateCircle?: (circleId: string, data: { name: string; teacherId?: string; teacherName?: string }) => Promise<void>;
+  onDeleteCircle?: (circleId: string) => Promise<void>;
+  onMoveCircle?: (circleId: string, targetComplexId: string, targetComplexName: string) => Promise<void>;
 }
 
 export const ComplexesAndCirclesTab: React.FC<ComplexesAndCirclesTabProps> = ({
@@ -39,6 +51,11 @@ export const ComplexesAndCirclesTab: React.FC<ComplexesAndCirclesTabProps> = ({
   onAddComplex,
   onAddCircle,
   onAddRecitation,
+  onUpdateComplex,
+  onDeleteComplex,
+  onUpdateCircle,
+  onDeleteCircle,
+  onMoveCircle,
 }) => {
   // Navigation stack: overview | complexDetail | circleDetail
   const [activeComplex, setActiveComplex] = useState<QuranComplex | null>(null);
@@ -73,8 +90,92 @@ export const ComplexesAndCirclesTab: React.FC<ComplexesAndCirclesTabProps> = ({
   const [recNotes, setRecNotes] = useState('حفظ متقن ومتميز');
   const [recComplaints, setRecComplaints] = useState('');
 
+  // Modals state for Edit / Delete / Move
+  const [editingComplex, setEditingComplex] = useState<QuranComplex | null>(null);
+  const [deletingComplex, setDeletingComplex] = useState<QuranComplex | null>(null);
+  const [editingCircle, setEditingCircle] = useState<QuranCircle | null>(null);
+  const [deletingCircle, setDeletingCircle] = useState<QuranCircle | null>(null);
+  const [movingCircle, setMovingCircle] = useState<QuranCircle | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
   const teachers = users.filter((u) => u.role === 'teacher');
   const students = users.filter((u) => u.role === 'student');
+
+  // Edit / Delete / Move handlers
+  const handleSaveEditComplex = async (
+    complexId: string,
+    data: { name: string; locationName: string; latitude?: number; longitude?: number }
+  ) => {
+    if (onUpdateComplex) {
+      await onUpdateComplex(complexId, data);
+    }
+    if (activeComplex && activeComplex.id === complexId) {
+      setActiveComplex((prev) => (prev ? { ...prev, ...data } : null));
+    }
+  };
+
+  const handleConfirmDeleteComplex = async () => {
+    if (!deletingComplex) return;
+    setIsDeleting(true);
+    try {
+      if (onDeleteComplex) {
+        await onDeleteComplex(deletingComplex.id);
+      }
+      if (activeComplex?.id === deletingComplex.id) {
+        setActiveComplex(null);
+        setActiveCircle(null);
+      }
+      setDeletingComplex(null);
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const handleSaveEditCircle = async (
+    circleId: string,
+    data: { name: string; teacherId?: string; teacherName?: string }
+  ) => {
+    if (onUpdateCircle) {
+      await onUpdateCircle(circleId, data);
+    }
+    if (activeCircle && activeCircle.id === circleId) {
+      setActiveCircle((prev) => (prev ? { ...prev, ...data } : null));
+    }
+  };
+
+  const handleConfirmDeleteCircle = async () => {
+    if (!deletingCircle) return;
+    setIsDeleting(true);
+    try {
+      if (onDeleteCircle) {
+        await onDeleteCircle(deletingCircle.id);
+      }
+      if (activeCircle?.id === deletingCircle.id) {
+        setActiveCircle(null);
+      }
+      setDeletingCircle(null);
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const handleConfirmMoveCircle = async (
+    circleId: string,
+    targetComplexId: string,
+    targetComplexName: string
+  ) => {
+    if (onMoveCircle) {
+      await onMoveCircle(circleId, targetComplexId, targetComplexName);
+    }
+    if (activeCircle && activeCircle.id === circleId) {
+      setActiveCircle((prev) => (prev ? { ...prev, complexId: targetComplexId } : null));
+      const targetParent = complexes.find((c) => c.id === targetComplexId);
+      if (targetParent) {
+        setActiveComplex(targetParent);
+      }
+    }
+    setMovingCircle(null);
+  };
 
   const handleCreateComplex = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -145,13 +246,147 @@ export const ComplexesAndCirclesTab: React.FC<ComplexesAndCirclesTabProps> = ({
     }
   };
 
+  // Fresh references to activeComplex and activeCircle from latest props
+  const currentActiveComplex = activeComplex
+    ? complexes.find((c) => c.id === activeComplex.id) || activeComplex
+    : null;
+
+  const currentActiveCircle = activeCircle
+    ? circles.find((c) => c.id === activeCircle.id) || activeCircle
+    : null;
+
+  const renderModals = () => (
+    <>
+      {editingComplex && (
+        <EditComplexModal
+          complex={editingComplex}
+          isOpen={!!editingComplex}
+          onClose={() => setEditingComplex(null)}
+          onSave={handleSaveEditComplex}
+        />
+      )}
+
+      {deletingComplex && (
+        <ConfirmDeleteModal
+          isOpen={!!deletingComplex}
+          title="تأكيد حذف المجمع القرآني"
+          itemName={deletingComplex.name}
+          itemType="complex"
+          isDeleting={isDeleting}
+          onConfirm={handleConfirmDeleteComplex}
+          onClose={() => setDeletingComplex(null)}
+        />
+      )}
+
+      {editingCircle && (
+        <EditCircleModal
+          circle={editingCircle}
+          teachers={teachers}
+          isOpen={!!editingCircle}
+          onClose={() => setEditingCircle(null)}
+          onSave={handleSaveEditCircle}
+        />
+      )}
+
+      {movingCircle && (
+        <MoveCircleModal
+          circle={movingCircle}
+          currentComplexName={
+            complexes.find((c) => c.id === movingCircle.complexId)?.name || 'المجمع الحالي'
+          }
+          availableComplexes={complexes}
+          isOpen={!!movingCircle}
+          onClose={() => setMovingCircle(null)}
+          onMove={handleConfirmMoveCircle}
+        />
+      )}
+
+      {deletingCircle && (
+        <ConfirmDeleteModal
+          isOpen={!!deletingCircle}
+          title="تأكيد حذف الحلقة القرآنية"
+          itemName={deletingCircle.name}
+          itemType="circle"
+          isDeleting={isDeleting}
+          onConfirm={handleConfirmDeleteCircle}
+          onClose={() => setDeletingCircle(null)}
+        />
+      )}
+
+      {/* MODAL: Add Circle to Complex */}
+      {circleTargetComplex && (
+        <div className="fixed inset-0 z-[1000] bg-[#053B50]/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#FFFFFF] border-2 border-[#E8DAC8] rounded-2xl w-full max-w-md p-6 shadow-2xl">
+            <h3 className="text-lg font-black text-[#053B50] mb-1">
+              إضافة حلقة قرآنية جديدة
+            </h3>
+            <p className="text-xs text-[#053B50]/70 mb-4">
+              إلحاق حلقة قرآنية بمجمع: <strong>{circleTargetComplex.name}</strong>
+            </p>
+
+            <form onSubmit={handleCreateCircle} className="space-y-4 text-xs">
+              <div>
+                <label className="block font-bold text-[#053B50] mb-1">اسم الحلقة <span className="text-red-500">*</span></label>
+                <input
+                  type="text"
+                  required
+                  value={newCircleName}
+                  onChange={(e) => setNewCircleName(e.target.value)}
+                  placeholder="مثال: حلقة الإتقان، حلقة التبيان..."
+                  className="w-full p-2.5 border-2 border-[#E8DAC8] rounded-xl outline-none focus:border-[#053B50] text-sm text-[#053B50]"
+                  autoFocus
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-[#053B50] mb-1">إلحاق معلم بالحلقة (اختياري الآن):</label>
+                <select
+                  value={selectedTeacherId}
+                  onChange={(e) => setSelectedTeacherId(e.target.value)}
+                  className="w-full p-2.5 border-2 border-[#E8DAC8] rounded-xl outline-none focus:border-[#053B50] text-xs text-[#053B50]"
+                >
+                  <option value="">-- اختر معلماً من القائمة أو حدده لاحقاً --</option>
+                  {teachers.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.username} ({t.email})
+                    </option>
+                  ))}
+                </select>
+                <span className="block text-[11px] text-[#053B50]/60 mt-1">
+                  يمكنك أيضاً إضافة المعلمين وتعيينهم مباشرة من تبويب "الحسابات".
+                </span>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setCircleTargetComplex(null)}
+                  className="px-4 py-2 text-xs font-bold text-[#053B50] hover:bg-[#E8DAC8] rounded-xl cursor-pointer"
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmittingCircle || !newCircleName.trim()}
+                  className="bg-[#053B50] hover:bg-[#042E3F] text-[#FFFFFF] text-xs font-bold px-5 py-2.5 rounded-xl shadow-md cursor-pointer disabled:opacity-50"
+                >
+                  {isSubmittingCircle ? 'جاري الإضافة...' : 'أضف الحلقة'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </>
+  );
+
   // If viewing circle detail
-  if (activeCircle && activeComplex) {
+  if (currentActiveCircle && currentActiveComplex) {
     return (
       <>
         <CircleDetailView
-          circle={activeCircle}
-          complexName={activeComplex.name}
+          circle={currentActiveCircle}
+          complexName={currentActiveComplex.name}
           recitations={recitations}
           students={students}
           selectedDate={selectedDate}
@@ -161,6 +396,9 @@ export const ComplexesAndCirclesTab: React.FC<ComplexesAndCirclesTabProps> = ({
             setRecitationTargetCircle(circle);
             setShowAddRecitationModal(true);
           }}
+          onEditCircle={(c) => setEditingCircle(c)}
+          onMoveCircle={(c) => setMovingCircle(c)}
+          onDeleteCircle={(c) => setDeletingCircle(c)}
         />
 
         {selectedStudentForModal && (
@@ -286,13 +524,13 @@ export const ComplexesAndCirclesTab: React.FC<ComplexesAndCirclesTabProps> = ({
                   <button
                     type="button"
                     onClick={() => setShowAddRecitationModal(false)}
-                    className="px-3 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg font-bold"
+                    className="px-3 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg font-bold cursor-pointer"
                   >
                     إلغاء
                   </button>
                   <button
                     type="submit"
-                    className="px-4 py-2 bg-[#053B50] text-white rounded-lg font-bold"
+                    className="px-4 py-2 bg-[#053B50] text-white rounded-lg font-bold cursor-pointer"
                   >
                     حفظ التسميع
                   </button>
@@ -301,16 +539,18 @@ export const ComplexesAndCirclesTab: React.FC<ComplexesAndCirclesTabProps> = ({
             </div>
           </div>
         )}
+
+        {renderModals()}
       </>
     );
   }
 
   // If viewing complex detail
-  if (activeComplex) {
+  if (currentActiveComplex) {
     return (
       <>
         <ComplexDetailView
-          complex={activeComplex}
+          complex={currentActiveComplex}
           circles={circles}
           recitations={recitations}
           students={students}
@@ -319,6 +559,12 @@ export const ComplexesAndCirclesTab: React.FC<ComplexesAndCirclesTabProps> = ({
           onSelectCircle={(circle) => setActiveCircle(circle)}
           onSelectStudent={(student) => setSelectedStudentForModal(student)}
           onBack={() => setActiveComplex(null)}
+          onEditComplex={(c) => setEditingComplex(c)}
+          onDeleteComplex={(c) => setDeletingComplex(c)}
+          onAddCircle={(c) => setCircleTargetComplex(c)}
+          onEditCircle={(c) => setEditingCircle(c)}
+          onMoveCircle={(c) => setMovingCircle(c)}
+          onDeleteCircle={(c) => setDeletingCircle(c)}
         />
 
         {selectedStudentForModal && (
@@ -328,6 +574,8 @@ export const ComplexesAndCirclesTab: React.FC<ComplexesAndCirclesTabProps> = ({
             onClose={() => setSelectedStudentForModal(null)}
           />
         )}
+
+        {renderModals()}
       </>
     );
   }
@@ -394,25 +642,50 @@ export const ComplexesAndCirclesTab: React.FC<ComplexesAndCirclesTabProps> = ({
               >
                 <div>
                   {/* Card Header */}
-                  <div className="flex items-start justify-between mb-3">
-                    <div className="flex items-center gap-3">
-                      <div className="w-11 h-11 rounded-xl bg-[#053B50] text-[#FFFFFF] flex items-center justify-center shrink-0">
+                  <div className="flex items-start justify-between mb-3 gap-2">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-11 h-11 rounded-xl bg-[#053B50] text-[#FFFFFF] flex items-center justify-center shrink-0 shadow-xs">
                         <Building2 className="w-6 h-6 text-[#E8DAC8]" />
                       </div>
-                      <div>
+                      <div className="min-w-0">
                         <h3
                           onClick={() => setActiveComplex(complex)}
-                          className="font-black text-base text-[#053B50] hover:underline cursor-pointer"
+                          className="font-black text-base text-[#053B50] hover:underline cursor-pointer truncate"
                         >
                           {complex.name}
                         </h3>
                         {complex.locationName && (
                           <p className="text-xs text-[#053B50]/70 flex items-center gap-1 mt-0.5">
-                            <MapPin className="w-3 h-3 text-[#053B50]" />
-                            <span className="truncate max-w-[180px]">{complex.locationName}</span>
+                            <MapPin className="w-3 h-3 text-[#053B50] shrink-0" />
+                            <span className="truncate max-w-[150px]">{complex.locationName}</span>
                           </p>
                         )}
                       </div>
+                    </div>
+
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setEditingComplex(complex);
+                        }}
+                        className="p-1.5 text-[#053B50] hover:bg-[#E8DAC8] rounded-xl border border-[#E8DAC8] transition-colors cursor-pointer"
+                        title="تعديل المجمع"
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setDeletingComplex(complex);
+                        }}
+                        className="p-1.5 text-red-600 hover:bg-red-100 rounded-xl border border-red-200 transition-colors cursor-pointer"
+                        title="حذف المجمع"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
                     </div>
                   </div>
 
@@ -569,70 +842,8 @@ export const ComplexesAndCirclesTab: React.FC<ComplexesAndCirclesTabProps> = ({
         />
       )}
 
-      {/* MODAL: Add Circle to Complex */}
-      {circleTargetComplex && (
-        <div className="fixed inset-0 z-[1000] bg-[#053B50]/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#FFFFFF] border-2 border-[#E8DAC8] rounded-2xl w-full max-w-md p-6 shadow-2xl">
-            <h3 className="text-lg font-black text-[#053B50] mb-1">
-              إضافة حلقة قرآنية جديدة
-            </h3>
-            <p className="text-xs text-[#053B50]/70 mb-4">
-              إلحاق حلقة قرآنية بمجمع: <strong>{circleTargetComplex.name}</strong>
-            </p>
-
-            <form onSubmit={handleCreateCircle} className="space-y-4 text-xs">
-              <div>
-                <label className="block font-bold text-[#053B50] mb-1">اسم الحلقة <span className="text-red-500">*</span></label>
-                <input
-                  type="text"
-                  required
-                  value={newCircleName}
-                  onChange={(e) => setNewCircleName(e.target.value)}
-                  placeholder="مثال: حلقة الإتقان، حلقة التبيان..."
-                  className="w-full p-2.5 border-2 border-[#E8DAC8] rounded-xl outline-none focus:border-[#053B50] text-sm text-[#053B50]"
-                  autoFocus
-                />
-              </div>
-
-              <div>
-                <label className="block font-bold text-[#053B50] mb-1">إلحاق معلم بالحلقة (اختياري الآن):</label>
-                <select
-                  value={selectedTeacherId}
-                  onChange={(e) => setSelectedTeacherId(e.target.value)}
-                  className="w-full p-2.5 border-2 border-[#E8DAC8] rounded-xl outline-none focus:border-[#053B50] text-xs text-[#053B50]"
-                >
-                  <option value="">-- اختر معلماً من القائمة أو حدده لاحقاً --</option>
-                  {teachers.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.username} ({t.email})
-                    </option>
-                  ))}
-                </select>
-                <span className="block text-[11px] text-[#053B50]/60 mt-1">
-                  يمكنك أيضاً إضافة المعلمين وتعيينهم مباشرة من تبويب "الحسابات".
-                </span>
-              </div>
-
-              <div className="flex items-center justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setCircleTargetComplex(null)}
-                  className="px-4 py-2 text-xs font-bold text-[#053B50] hover:bg-[#E8DAC8] rounded-xl cursor-pointer"
-                >
-                  إلغاء
-                </button>
-                <button
-                  type="submit"
-                  disabled={isSubmittingCircle || !newCircleName.trim()}
-                  className="bg-[#053B50] hover:bg-[#042E3F] text-[#FFFFFF] text-xs font-bold px-5 py-2.5 rounded-xl shadow-md cursor-pointer disabled:opacity-50"
-                >
-                  {isSubmittingCircle ? 'جاري الإضافة...' : 'أضف الحلقة'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      {/* Modals for Edit / Move / Delete / Add Circle */}
+      {renderModals()}
     </div>
   );
 };

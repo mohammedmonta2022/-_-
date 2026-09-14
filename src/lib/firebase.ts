@@ -484,12 +484,84 @@ export async function addComplex(name: string, locationName?: string, lat?: numb
   return complex;
 }
 
+export async function updateComplex(
+  complexId: string,
+  data: { name?: string; locationName?: string; latitude?: number; longitude?: number }
+): Promise<boolean> {
+  try {
+    const complexDoc = doc(db, COMPLEXES_COLLECTION, complexId);
+    await setDoc(complexDoc, data, { merge: true });
+
+    // If complex name was updated, also update complexName in users
+    if (data.name) {
+      const usersSnap = await getDocs(
+        query(collection(db, USERS_COLLECTION), where('complexId', '==', complexId))
+      );
+      if (!usersSnap.empty) {
+        const batch = writeBatch(db);
+        usersSnap.docs.forEach((uDoc) => {
+          batch.update(uDoc.ref, { complexName: data.name });
+        });
+        await batch.commit();
+      }
+    }
+    return true;
+  } catch (err) {
+    console.error('[Firestore] Error updating complex:', err);
+    return false;
+  }
+}
+
+export async function deleteComplex(complexId: string): Promise<boolean> {
+  try {
+    // 1. Delete complex document
+    await deleteDoc(doc(db, COMPLEXES_COLLECTION, complexId));
+
+    // 2. Delete circles belonging to this complex
+    const circsSnap = await getDocs(
+      query(collection(db, CIRCLES_COLLECTION), where('complexId', '==', complexId))
+    );
+    const batch = writeBatch(db);
+    circsSnap.docs.forEach((cDoc) => {
+      batch.delete(cDoc.ref);
+    });
+
+    // 3. Unlink users associated with this complex
+    const usersSnap = await getDocs(
+      query(collection(db, USERS_COLLECTION), where('complexId', '==', complexId))
+    );
+    usersSnap.docs.forEach((uDoc) => {
+      batch.update(uDoc.ref, { complexId: '', complexName: '', circleId: '', circleName: '' });
+    });
+
+    await batch.commit();
+    return true;
+  } catch (err) {
+    console.error('[Firestore] Error deleting complex:', err);
+    return false;
+  }
+}
+
 export async function getComplexes(): Promise<QuranComplex[]> {
   try {
     const snap = await getDocs(collection(db, COMPLEXES_COLLECTION));
     return snap.docs.map((d) => ({ id: d.id, ...d.data() } as QuranComplex));
   } catch (err) {
     console.error('[Firestore] Error fetching complexes:', err);
+    return [];
+  }
+}
+
+export async function getCircles(complexId?: string): Promise<QuranCircle[]> {
+  try {
+    let q = query(collection(db, CIRCLES_COLLECTION));
+    if (complexId) {
+      q = query(q, where('complexId', '==', complexId));
+    }
+    const snap = await getDocs(q);
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() } as QuranCircle));
+  } catch (err) {
+    console.error('[Firestore] Error fetching circles:', err);
     return [];
   }
 }
@@ -513,18 +585,85 @@ export async function addCircle(
   return circle;
 }
 
-export async function getCircles(complexId?: string): Promise<QuranCircle[]> {
+export async function updateCircle(
+  circleId: string,
+  data: { name?: string; teacherId?: string; teacherName?: string }
+): Promise<boolean> {
   try {
-    if (complexId) {
-      const q = query(collection(db, CIRCLES_COLLECTION), where('complexId', '==', complexId));
-      const snap = await getDocs(q);
-      return snap.docs.map((d) => ({ id: d.id, ...d.data() } as QuranCircle));
+    const circleDoc = doc(db, CIRCLES_COLLECTION, circleId);
+    await setDoc(circleDoc, data, { merge: true });
+
+    // If circle name was updated, update users assigned to this circle
+    if (data.name) {
+      const usersSnap = await getDocs(
+        query(collection(db, USERS_COLLECTION), where('circleId', '==', circleId))
+      );
+      if (!usersSnap.empty) {
+        const batch = writeBatch(db);
+        usersSnap.docs.forEach((uDoc) => {
+          batch.update(uDoc.ref, { circleName: data.name });
+        });
+        await batch.commit();
+      }
     }
-    const snap = await getDocs(collection(db, CIRCLES_COLLECTION));
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() } as QuranCircle));
+    return true;
   } catch (err) {
-    console.error('[Firestore] Error fetching circles:', err);
-    return [];
+    console.error('[Firestore] Error updating circle:', err);
+    return false;
+  }
+}
+
+export async function deleteCircle(circleId: string): Promise<boolean> {
+  try {
+    // 1. Delete circle doc
+    await deleteDoc(doc(db, CIRCLES_COLLECTION, circleId));
+
+    // 2. Unlink users from this circle
+    const usersSnap = await getDocs(
+      query(collection(db, USERS_COLLECTION), where('circleId', '==', circleId))
+    );
+    if (!usersSnap.empty) {
+      const batch = writeBatch(db);
+      usersSnap.docs.forEach((uDoc) => {
+        batch.update(uDoc.ref, { circleId: '', circleName: '' });
+      });
+      await batch.commit();
+    }
+    return true;
+  } catch (err) {
+    console.error('[Firestore] Error deleting circle:', err);
+    return false;
+  }
+}
+
+export async function moveCircle(
+  circleId: string,
+  targetComplexId: string,
+  targetComplexName: string
+): Promise<boolean> {
+  try {
+    // 1. Update circle's complexId
+    const circleDoc = doc(db, CIRCLES_COLLECTION, circleId);
+    await setDoc(circleDoc, { complexId: targetComplexId }, { merge: true });
+
+    // 2. Update all users/students in this circle so complexId and complexName match the new complex
+    const usersSnap = await getDocs(
+      query(collection(db, USERS_COLLECTION), where('circleId', '==', circleId))
+    );
+    if (!usersSnap.empty) {
+      const batch = writeBatch(db);
+      usersSnap.docs.forEach((uDoc) => {
+        batch.update(uDoc.ref, {
+          complexId: targetComplexId,
+          complexName: targetComplexName,
+        });
+      });
+      await batch.commit();
+    }
+    return true;
+  } catch (err) {
+    console.error('[Firestore] Error moving circle:', err);
+    return false;
   }
 }
 

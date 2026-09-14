@@ -6,6 +6,9 @@ import {
   ArrowRight,
   User,
   Plus,
+  Pencil,
+  ArrowLeftRight,
+  Trash2,
 } from 'lucide-react';
 import type { QuranCircle, RecitationRecord, UserAccount } from '../types';
 import { AnimatedCounter } from './AnimatedCounter';
@@ -19,6 +22,9 @@ interface CircleDetailViewProps {
   onSelectStudent: (student: UserAccount) => void;
   onBack: () => void;
   onAddRecitation: (circle: QuranCircle) => void;
+  onEditCircle?: (circle: QuranCircle) => void;
+  onMoveCircle?: (circle: QuranCircle) => void;
+  onDeleteCircle?: (circle: QuranCircle) => void;
 }
 
 export const CircleDetailView: React.FC<CircleDetailViewProps> = ({
@@ -30,6 +36,9 @@ export const CircleDetailView: React.FC<CircleDetailViewProps> = ({
   onSelectStudent,
   onBack,
   onAddRecitation,
+  onEditCircle,
+  onMoveCircle,
+  onDeleteCircle,
 }) => {
   // Recitations for this circle on selected date
   const dateRecitations = recitations.filter(
@@ -76,14 +85,52 @@ export const CircleDetailView: React.FC<CircleDetailViewProps> = ({
             </p>
           </div>
 
-          <button
-            type="button"
-            onClick={() => onAddRecitation(circle)}
-            className="bg-[#053B50] hover:bg-[#042E3F] text-[#FFFFFF] text-xs font-bold px-4 py-2.5 rounded-xl flex items-center gap-1.5 shadow-md cursor-pointer transition-colors"
-          >
-            <Plus className="w-4 h-4 text-[#E8DAC8]" />
-            <span>تسجيل تسميع جديد اليوم</span>
-          </button>
+          <div className="flex items-center gap-2 flex-wrap">
+            {onEditCircle && (
+              <button
+                type="button"
+                onClick={() => onEditCircle(circle)}
+                className="bg-[#F7F3EE] hover:bg-[#E8DAC8] text-[#053B50] text-xs font-bold px-3 py-2 rounded-xl border border-[#E8DAC8] flex items-center gap-1.5 transition-colors cursor-pointer"
+                title="تعديل اسم الحلقة أو المعلم"
+              >
+                <Pencil className="w-3.5 h-3.5" />
+                <span>تعديل الحلقة</span>
+              </button>
+            )}
+
+            {onMoveCircle && (
+              <button
+                type="button"
+                onClick={() => onMoveCircle(circle)}
+                className="bg-[#F7F3EE] hover:bg-[#E8DAC8] text-[#053B50] text-xs font-bold px-3 py-2 rounded-xl border border-[#E8DAC8] flex items-center gap-1.5 transition-colors cursor-pointer"
+                title="نقل الحلقة لمجمع قرآني آخر"
+              >
+                <ArrowLeftRight className="w-3.5 h-3.5" />
+                <span>نقل لمجمع آخر</span>
+              </button>
+            )}
+
+            {onDeleteCircle && (
+              <button
+                type="button"
+                onClick={() => onDeleteCircle(circle)}
+                className="bg-red-50 hover:bg-red-100 text-red-700 text-xs font-bold px-3 py-2 rounded-xl border border-red-200 flex items-center gap-1.5 transition-colors cursor-pointer"
+                title="حذف الحلقة"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>حذف الحلقة</span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={() => onAddRecitation(circle)}
+              className="bg-[#053B50] hover:bg-[#042E3F] text-[#FFFFFF] text-xs font-bold px-4 py-2.5 rounded-xl flex items-center gap-1.5 shadow-md cursor-pointer transition-colors"
+            >
+              <Plus className="w-4 h-4 text-[#E8DAC8]" />
+              <span>تسجيل تسميع جديد اليوم</span>
+            </button>
+          </div>
         </div>
       </div>
 
