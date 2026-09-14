@@ -7,10 +7,8 @@ import {
   CheckCircle2,
   RefreshCw,
   ArrowRight,
-  HelpCircle,
-  Eye,
 } from 'lucide-react';
-import { getSavedSenderToken, authorizeSenderEmail } from '../lib/firebase';
+import { getSavedSenderToken } from '../lib/firebase';
 import { sendEmailViaGmail, generateEmailHtml } from '../lib/gmail';
 
 interface VerificationModalProps {
@@ -39,12 +37,9 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [resending, setResending] = useState(false);
   const [resendTimer, setResendTimer] = useState(60);
-  const [isSendingToGmail, setIsSendingToGmail] = useState(false);
   const [sendSuccessMsg, setSendSuccessMsg] = useState<string | null>(
     `تم إرسال رمز التحقق إلى بريدك الإلكتروني: ${email}`
   );
-  const [showFallbackCode, setShowFallbackCode] = useState(false);
-  const [hasSenderAuth, setHasSenderAuth] = useState(false);
 
   // Prevent background page scrolling while modal is open
   useEffect(() => {
@@ -55,30 +50,27 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
     };
   }, []);
 
-  // Try automatic send if sender token exists
+  // Automatic send using the sender account stored in database
   useEffect(() => {
-    async function checkAuthAndSend() {
+    async function triggerAuthorizedSend() {
       try {
         const token = await getSavedSenderToken();
-        if (token) {
-          setHasSenderAuth(true);
-          if (expectedCode) {
-            sendEmailViaGmail({
-              to: email,
-              subject: `رمز التحقق لمجمع عزم التعليمي (${expectedCode})`,
-              htmlContent: generateEmailHtml(expectedCode, username, purpose),
-            }).then((res) => {
-              if (res.success) {
-                setSendSuccessMsg(`تم إرسال رمز التحقق بنجاح إلى بريدك الإلكتروني (${email})`);
-              }
-            });
-          }
+        if (token && expectedCode) {
+          sendEmailViaGmail({
+            to: email,
+            subject: `رمز التحقق لمجمع عزم التعليمي (${expectedCode})`,
+            htmlContent: generateEmailHtml(expectedCode, username, purpose),
+          }).then((res) => {
+            if (res.success) {
+              setSendSuccessMsg(`تم إرسال رمز التحقق بنجاح إلى بريدك الإلكتروني (${email})`);
+            }
+          });
         }
       } catch (err) {
-        console.error('Error checking sender auth:', err);
+        console.error('Error dispatching verification email:', err);
       }
     }
-    checkAuthAndSend();
+    triggerAuthorizedSend();
   }, [email, expectedCode, username, purpose]);
 
   useEffect(() => {
@@ -101,57 +93,7 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
 
     const success = await onVerify(cleanCode);
     if (!success) {
-      setError('رمز التحقق غير صحيح، يُرجى التأكد وإعادة المحاولة');
-    }
-  };
-
-  const handleSendViaGmailDirectly = async () => {
-    if (!expectedCode) return;
-    setIsSendingToGmail(true);
-    setError(null);
-    setSendSuccessMsg(null);
-
-    try {
-      let token = await getSavedSenderToken();
-      if (!token) {
-        const authRes = await authorizeSenderEmail(email);
-        if (!authRes.success) {
-          throw new Error(authRes.error || 'تعذر استكمال الاتصال بالبريد');
-        }
-        token = await getSavedSenderToken();
-        if (token) setHasSenderAuth(true);
-      }
-
-      const html = generateEmailHtml(expectedCode, username, purpose);
-      const res = await sendEmailViaGmail({
-        to: email,
-        subject: `رمز التحقق لمجمع عزم التعليمي (${expectedCode})`,
-        htmlContent: html,
-      });
-
-      if (res.success) {
-        setSendSuccessMsg(`تم إرسال البريد بنجاح إلى ${email}! تفقّد صندوق الوارد (Inbox) أو الرسائل غير المرغوب فيها.`);
-      } else {
-        setError(res.error || 'تعذر إرسال البريد، يمكنك استخدام الرمز المباشر أدناه');
-        setShowFallbackCode(true);
-      }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (
-        msg.includes('403') ||
-        msg.includes('access_denied') ||
-        msg.includes('popup-closed') ||
-        msg.includes('blocked')
-      ) {
-        setError(
-          'يمكنك استخدام الرمز المباشر أدناه لتأكيد حسابك فوراً.'
-        );
-      } else {
-        setError(`ملاحظة: ${msg}`);
-      }
-      setShowFallbackCode(true);
-    } finally {
-      setIsSendingToGmail(false);
+      setError('رمز التحقق غير صحيح أو منتهي الصلاحية، يُرجى التأكد وإعادة المحاولة');
     }
   };
 
@@ -173,9 +115,6 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-[999] overflow-y-auto overflow-x-hidden bg-[#053B50]/75 backdrop-blur-sm flex min-h-full items-center justify-center p-3 sm:p-4">
-      {/* Background click interceptor to prevent page interaction behind */}
-      <div className="fixed inset-0 pointer-events-none" />
-
       <motion.div
         initial={{ opacity: 0, scale: 0.95, y: 15 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -202,7 +141,7 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
             </p>
           </div>
 
-          {/* Simple Clean Email Box */}
+          {/* Clean Email Display */}
           <div className="bg-[#F7F3EE] border border-[#E8DAC8] rounded-xl p-3.5 mb-4 flex items-center gap-2.5 text-xs text-[#053B50]">
             <Mail className="w-4 h-4 text-[#053B50] shrink-0" />
             <div className="flex-1 overflow-hidden">
@@ -215,57 +154,11 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
             </div>
           </div>
 
-          {/* Clean Success Message Alert */}
+          {/* Success Message Alert */}
           {sendSuccessMsg && (
             <div className="mb-4 p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs flex items-center gap-2">
               <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
               <span className="font-medium">{sendSuccessMsg}</span>
-            </div>
-          )}
-
-          {/* Fallback Revealed Code if needed */}
-          {showFallbackCode && expectedCode && (
-            <motion.div
-              initial={{ opacity: 0, y: -6 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="mb-4 p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs"
-            >
-              <div className="flex items-center justify-between mb-1">
-                <span className="font-bold flex items-center gap-1">
-                  <HelpCircle className="w-3.5 h-3.5 text-amber-700" />
-                  رمز التحقق المباشر لحسابك:
-                </span>
-                <span className="font-mono font-black text-lg tracking-widest text-[#053B50]">
-                  {expectedCode}
-                </span>
-              </div>
-              <p className="text-[11px] text-amber-800/80 leading-relaxed">
-                يمكنك إدخال هذا الرمز أدناه لتأكيد بريدك فوراً ومتابعة الخطوة التالية.
-              </p>
-            </motion.div>
-          )}
-
-          {/* Optional Re-send button via Google if auth absent and user wants direct dispatch */}
-          {!hasSenderAuth && !showFallbackCode && (
-            <div className="mb-4">
-              <button
-                type="button"
-                onClick={handleSendViaGmailDirectly}
-                disabled={isSendingToGmail}
-                className="w-full bg-[#FFFFFF] hover:bg-[#F7F3EE] text-[#053B50] border border-[#053B50] font-bold py-2 px-3 rounded-xl transition-all text-xs flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
-              >
-                {isSendingToGmail ? (
-                  <>
-                    <RefreshCw className="w-3.5 h-3.5 animate-spin text-[#053B50]" />
-                    <span>جاري إرسال البريد...</span>
-                  </>
-                ) : (
-                  <>
-                    <Mail className="w-3.5 h-3.5 text-[#053B50]" />
-                    <span>إرسال الرمز مباشرة إلى البريد</span>
-                  </>
-                )}
-              </button>
             </div>
           )}
 
@@ -313,20 +206,6 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
               )}
             </button>
           </form>
-
-          {/* Option to show code directly if email has delay */}
-          {!showFallbackCode && expectedCode && (
-            <div className="mt-3 text-center">
-              <button
-                type="button"
-                onClick={() => setShowFallbackCode(true)}
-                className="text-[11px] text-[#053B50]/60 hover:text-[#053B50] underline cursor-pointer inline-flex items-center gap-1"
-              >
-                <Eye className="w-3 h-3" />
-                <span>لم يصلك البريد بعد؟ اضغط هنا لعرض رمز التحقق</span>
-              </button>
-            </div>
-          )}
 
           {/* Resend and Back Buttons */}
           <div className="mt-5 pt-4 border-t border-[#E8DAC8] flex items-center justify-between text-xs">

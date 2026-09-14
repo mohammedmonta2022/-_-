@@ -11,7 +11,6 @@ import {
   RefreshCw,
   X,
   ArrowLeft,
-  HelpCircle,
 } from 'lucide-react';
 import {
   findUser,
@@ -19,7 +18,6 @@ import {
   verifyCode,
   updateUserPassword,
   getSavedSenderToken,
-  authorizeSenderEmail,
 } from '../lib/firebase';
 import { sendEmailViaGmail, generateEmailHtml } from '../lib/gmail';
 
@@ -46,12 +44,7 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [activeCodePreview, setActiveCodePreview] = useState<string | undefined>(undefined);
   const [emailNotice, setEmailNotice] = useState<string | undefined>(undefined);
-
-  const [isSendingGmail, setIsSendingGmail] = useState(false);
-  const [gmailSentSuccess, setGmailSentSuccess] = useState<string | null>(null);
-  const [showFallbackCode, setShowFallbackCode] = useState(false);
 
   // Prevent background scroll when modal is open
   useEffect(() => {
@@ -66,7 +59,7 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
 
   if (!isOpen) return null;
 
-  // Step 1: Search user and prepare code
+  // Step 1: Search user and send code via authorized account
   const handleRequestCode = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -89,10 +82,11 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
       setTargetUsername(user.username);
 
       const generatedCode = Math.floor(100000 + Math.random() * 900000).toString();
-      setActiveCodePreview(generatedCode);
 
+      // Persist in Firestore database
       await saveVerificationCode(user.email, generatedCode, 'reset_password');
 
+      // Dispatch automatically using the authorized sender stored in database
       const token = await getSavedSenderToken();
       if (token) {
         sendEmailViaGmail({
@@ -101,7 +95,7 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
           htmlContent: generateEmailHtml(generatedCode, user.username, 'reset_password'),
         }).then((res) => {
           if (res.success) {
-            setGmailSentSuccess(`تم إرسال رمز التحقق إلى بريدك الإلكتروني: ${user.email}`);
+            setEmailNotice(`تم إرسال رمز التحقق بنجاح إلى بريدك الإلكتروني: ${user.email}`);
           }
         });
       }
@@ -113,43 +107,6 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
       setError(`خطأ أثناء البحث عن الحساب: ${msg}`);
     } finally {
       setLoading(false);
-    }
-  };
-
-  const handleSendGmailDirectly = async () => {
-    if (!activeCodePreview || !targetEmail) return;
-    setIsSendingGmail(true);
-    setError(null);
-    setGmailSentSuccess(null);
-
-    try {
-      let token = await getSavedSenderToken();
-      if (!token) {
-        const authRes = await authorizeSenderEmail(targetEmail);
-        if (!authRes.success) {
-          throw new Error(authRes.error || 'تعذر إرسال البريد');
-        }
-        token = await getSavedSenderToken();
-      }
-
-      const html = generateEmailHtml(activeCodePreview, targetUsername, 'reset_password');
-      const res = await sendEmailViaGmail({
-        to: targetEmail,
-        subject: `رمز إعادة تعيين كلمة المرور - مجمع عزم التعليمي (${activeCodePreview})`,
-        htmlContent: html,
-      });
-
-      if (res.success) {
-        setGmailSentSuccess(`تم إرسال البريد بنجاح إلى ${targetEmail}! تفقد صندوق الوارد.`);
-      } else {
-        setError('تعذر إرسال البريد حالياً، يمكنك استخدام الرمز المباشر أدناه.');
-        setShowFallbackCode(true);
-      }
-    } catch {
-      setError('يمكنك استخدام الرمز المباشر أدناه للمتابعة فوراً.');
-      setShowFallbackCode(true);
-    } finally {
-      setIsSendingGmail(false);
     }
   };
 
@@ -175,13 +132,15 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
 
     setLoading(true);
     try {
+      // Strictly verify from Firestore
       const verification = await verifyCode(targetEmail, cleanCode, 'reset_password');
-      if (!verification.success && cleanCode !== activeCodePreview) {
-        setError(verification.message || 'رمز التحقق غير صحيح');
+      if (!verification.success) {
+        setError(verification.message || 'رمز التحقق غير صحيح أو منتهي الصلاحية');
         setLoading(false);
         return;
       }
 
+      // Update password directly in Firestore
       const updated = await updateUserPassword(targetEmail, newPassword);
       if (!updated) {
         setError('تعذر تحديث كلمة المرور في النظام');
@@ -274,7 +233,7 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
                       <span>جاري البحث عن الحساب...</span>
                     </>
                   ) : (
-                    <span>متابعة والتحقق من الحساب</span>
+                    <span>متابعة وإرسال رمز التحقق</span>
                   )}
                 </button>
               </form>
@@ -300,35 +259,6 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
                 <div className="mb-3.5 p-2.5 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs">
                   {emailNotice}
                 </div>
-              )}
-
-              {gmailSentSuccess && (
-                <div className="mb-3.5 p-2 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs flex items-center gap-1.5">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span>{gmailSentSuccess}</span>
-                </div>
-              )}
-
-              {/* Direct Code if needed */}
-              {showFallbackCode && activeCodePreview && (
-                <motion.div
-                  initial={{ opacity: 0, y: -6 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className="mb-3.5 p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs"
-                >
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="font-bold flex items-center gap-1">
-                      <HelpCircle className="w-3.5 h-3.5 text-amber-700" />
-                      رمز التحقق لحسابك:
-                    </span>
-                    <span className="font-mono font-black text-lg tracking-widest text-[#053B50]">
-                      {activeCodePreview}
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-amber-800/80 leading-relaxed">
-                    يمكنك إدخال هذا الرمز أدناه لمتابعة تغيير كلمة المرور فوراً.
-                  </p>
-                </motion.div>
               )}
 
               <form onSubmit={handleResetPassword} className="space-y-3.5">
@@ -422,19 +352,6 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
                   )}
                 </button>
               </form>
-
-              {!showFallbackCode && activeCodePreview && (
-                <div className="mt-3 text-center">
-                  <button
-                    type="button"
-                    onClick={() => setShowFallbackCode(true)}
-                    className="text-[11px] text-[#053B50]/60 hover:text-[#053B50] underline cursor-pointer inline-flex items-center gap-1"
-                  >
-                    <Eye className="w-3 h-3" />
-                    <span>لم يصلك البريد؟ اضغط هنا لعرض الرمز</span>
-                  </button>
-                </div>
-              )}
 
               <div className="mt-4 text-center">
                 <button
