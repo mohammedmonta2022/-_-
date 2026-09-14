@@ -1,9 +1,8 @@
 import React, { useState } from 'react';
 import { User, Mail, Lock, Eye, EyeOff, AlertCircle, ArrowLeft, Send } from 'lucide-react';
-import { findUser, saveVerificationCode } from '../lib/firebase';
+import { findUser, saveVerificationCode, verifyCode, createUserAccount } from '../lib/firebase';
 import { sendEmailViaGmail, generateEmailHtml } from '../lib/gmail';
 import { VerificationModal } from './VerificationModal';
-import { createUserAccount } from '../lib/firebase';
 
 interface RegisterFormProps {
   onSuccess: (username: string) => void;
@@ -133,12 +132,13 @@ export const RegisterForm: React.FC<RegisterFormProps> = ({
   const handleVerifyCodeAndSave = async (enteredCode: string): Promise<boolean> => {
     setVerifyLoading(true);
     try {
-      // Check code matching
-      if (enteredCode !== activeCode) {
+      // 1. Check code matching against Firestore
+      const verifyResult = await verifyCode(email.trim().toLowerCase(), enteredCode, 'register');
+      if (!verifyResult.success && enteredCode !== activeCode) {
         return false;
       }
 
-      // Save user to Firestore permanently
+      // 2. Save user to Firestore permanently
       await createUserAccount({
         username: username.trim(),
         email: email.trim().toLowerCase(),

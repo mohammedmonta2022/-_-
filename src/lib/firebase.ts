@@ -23,25 +23,36 @@ import firebaseConfig from '../../firebase-applet-config.json';
 
 // Initialize Firebase App safely
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
-export const db = getFirestore(app);
+
+// Connect specifically to the named Firestore database ID
+const firestoreDbId = firebaseConfig.firestoreDatabaseId || 'ai-studio-8693706e-c5dd-4536-89e2-841d263fe9b5';
+export const db = getFirestore(app, firestoreDbId);
 export const auth = getAuth(app);
+
+// Purge any residual local storage from previous versions
+try {
+  localStorage.removeItem('azm_users_store_v1');
+  localStorage.removeItem('azm_codes_store_v1');
+  localStorage.removeItem('azm_system_config_v1');
+  localStorage.removeItem('azm_system_config');
+} catch {
+  // Ignore
+}
 
 // Google Provider with Gmail Send scope
 const provider = new GoogleAuthProvider();
 provider.addScope('https://www.googleapis.com/auth/gmail.send');
-// Hint offline access / prompt select account
 provider.setCustomParameters({
   prompt: 'select_account',
 });
 
-// Test connection on boot per Firebase guidelines
+// Test connection to Firestore on app startup
 (async function testConnection() {
   try {
     await getDocFromServer(doc(db, 'system_config', 'mailer_settings'));
+    console.log(`[Firebase Firestore] Connected successfully to database: ${firestoreDbId}`);
   } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.warn('Firebase client is running in offline mode:', error.message);
-    }
+    console.info('[Firebase Firestore] Initialized database connection:', firestoreDbId);
   }
 })();
 
@@ -101,7 +112,7 @@ export const getAccessToken = (): string | null => {
 };
 
 /**
- * Manually set access token in memory
+ * Set access token in memory
  */
 export const setAccessToken = (token: string | null): void => {
   cachedAccessToken = token;
@@ -115,108 +126,30 @@ export const logoutAuth = async () => {
   cachedAccessToken = null;
 };
 
-// Collections
+// Firestore Collections
 const USERS_COLLECTION = 'users';
 const VERIFICATION_COLLECTION = 'verification_codes';
 const SYSTEM_CONFIG_COLLECTION = 'system_config';
 const MAILER_DOC_ID = 'mailer_settings';
 
-// Local storage cache keys for instant responsiveness and offline capability
-const LOCAL_USERS_KEY = 'azm_users_store_v1';
-const LOCAL_CODES_KEY = 'azm_codes_store_v1';
-const LOCAL_SYSTEM_CONFIG_KEY = 'azm_system_config_v1';
-
-function getLocalUsers(): UserAccount[] {
-  try {
-    const raw = localStorage.getItem(LOCAL_USERS_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveLocalUsers(users: UserAccount[]): void {
-  try {
-    localStorage.setItem(LOCAL_USERS_KEY, JSON.stringify(users));
-  } catch {
-    // Ignore quota errors
-  }
-}
-
-function getLocalCodes(): VerificationCodeRecord[] {
-  try {
-    const raw = localStorage.getItem(LOCAL_CODES_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveLocalCodes(codes: VerificationCodeRecord[]): void {
-  try {
-    localStorage.setItem(LOCAL_CODES_KEY, JSON.stringify(codes));
-  } catch {
-    // Ignore quota errors
-  }
-}
-
-function getLocalSystemConfig(): SystemConfig | null {
-  try {
-    const raw = localStorage.getItem(LOCAL_SYSTEM_CONFIG_KEY);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
-}
-
-function saveLocalSystemConfig(config: SystemConfig): void {
-  try {
-    localStorage.setItem(LOCAL_SYSTEM_CONFIG_KEY, JSON.stringify(config));
-  } catch {
-    // Ignore quota errors
-  }
-}
-
 /**
- * Executes a promise with an automatic timeout to prevent the UI from freezing
- */
-async function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
-  let timer: ReturnType<typeof setTimeout>;
-  const timeoutPromise = new Promise<T>((resolve) => {
-    timer = setTimeout(() => resolve(fallback), ms);
-  });
-  try {
-    const result = await Promise.race([promise, timeoutPromise]);
-    clearTimeout(timer!);
-    return result;
-  } catch {
-    clearTimeout(timer!);
-    return fallback;
-  }
-}
-
-/**
- * Retrieve System Configuration (Official Mailer Email)
+ * Retrieve System Configuration directly from Firestore
  */
 export async function getSystemConfig(): Promise<SystemConfig | null> {
   try {
     const ref = doc(db, SYSTEM_CONFIG_COLLECTION, MAILER_DOC_ID);
-    const snap = await withTimeout(getDoc(ref), 2500, null);
-    if (snap && snap.exists()) {
-      const data = snap.data() as SystemConfig;
-      saveLocalSystemConfig(data);
-      return data;
+    const snap = await getDoc(ref);
+    if (snap.exists()) {
+      return snap.data() as SystemConfig;
     }
   } catch (err) {
-    console.warn('Could not fetch system config from Firestore:', err);
+    console.error('[Firestore] Error getting system config:', err);
   }
-
-  // Fallback to local
-  return getLocalSystemConfig();
+  return null;
 }
 
 /**
- * Save or Update System Configuration
+ * Save System Configuration directly to Firestore
  */
 export async function saveSystemConfig(config: Partial<SystemConfig>): Promise<void> {
   const current = (await getSystemConfig()) || {
@@ -234,18 +167,13 @@ export async function saveSystemConfig(config: Partial<SystemConfig>): Promise<v
     configuredAt: new Date().toISOString(),
   };
 
-  saveLocalSystemConfig(updated);
-
-  try {
-    const ref = doc(db, SYSTEM_CONFIG_COLLECTION, MAILER_DOC_ID);
-    await withTimeout(setDoc(ref, updated, { merge: true }), 3000, null);
-  } catch (err) {
-    console.warn('Could not save system config to Firestore:', err);
-  }
+  const ref = doc(db, SYSTEM_CONFIG_COLLECTION, MAILER_DOC_ID);
+  await setDoc(ref, updated, { merge: true });
+  console.log('[Firestore] System configuration saved to Firestore:', updated);
 }
 
 /**
- * Check if the current system has an official sender email
+ * Check if the system has an official sender email in Firestore
  */
 export async function getOfficialSenderEmail(): Promise<string | null> {
   const config = await getSystemConfig();
@@ -256,16 +184,15 @@ export async function getOfficialSenderEmail(): Promise<string | null> {
 }
 
 /**
- * Save user to Firestore and Local Cache.
- * If this is the first user registering in the system, automatically assign them
- * as the Administrator and the Official Mailer Email!
+ * Save user strictly to Firebase Firestore.
+ * If this is the first user in Firestore, automatically mark them as Admin & Official Sender!
  */
 export async function createUserAccount(user: Omit<UserAccount, 'id'>): Promise<string> {
   const cleanEmail = user.email.toLowerCase().trim();
   const cleanUsername = user.username.trim();
   const id = `user_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
-  // Check if system already has registered users or a sender email
+  // Check if system already has registered users or a sender email in Firestore
   const existingConfig = await getSystemConfig();
   const isFirstUser = !existingConfig || !existingConfig.firstUserRegistered || !existingConfig.senderEmail;
 
@@ -278,7 +205,7 @@ export async function createUserAccount(user: Omit<UserAccount, 'id'>): Promise<
     isOfficialSender: user.isOfficialSender !== undefined ? user.isOfficialSender : isFirstUser,
   };
 
-  // If this is the first user, record them in system_config as the official mailer!
+  // 1. If this is the first user, record in system_config in Firestore
   if (isFirstUser) {
     await saveSystemConfig({
       senderEmail: cleanEmail,
@@ -288,83 +215,53 @@ export async function createUserAccount(user: Omit<UserAccount, 'id'>): Promise<
     });
   }
 
-  // 1. Immediately cache locally
-  const currentUsers = getLocalUsers();
-  const filtered = currentUsers.filter(
-    (u) => u.email !== cleanEmail && u.username.toLowerCase() !== cleanUsername.toLowerCase()
-  );
-  filtered.push(newUserData);
-  saveLocalUsers(filtered);
-
-  // 2. Persist to Firestore with timeout
-  try {
-    const userRef = doc(collection(db, USERS_COLLECTION), id);
-    await withTimeout(setDoc(userRef, newUserData), 3500, null);
-  } catch (err) {
-    console.info('Cloud sync deferred, saved locally');
-  }
+  // 2. Persist directly to Firestore users collection
+  const userRef = doc(collection(db, USERS_COLLECTION), id);
+  await setDoc(userRef, newUserData);
+  console.log(`[Firestore] User saved successfully in Firestore: ${cleanUsername} (${id})`);
 
   return id;
 }
 
 /**
- * Find user by either username or email with instant fallback
+ * Find user strictly in Firebase Firestore by username or email
  */
 export async function findUser(identifier: string): Promise<UserAccount | null> {
   const cleanId = identifier.trim();
   const lower = cleanId.toLowerCase();
 
-  // 1. Check local cache first for instant response
-  const localUsers = getLocalUsers();
-  const localMatch = localUsers.find(
-    (u) => u.email.toLowerCase() === lower || u.username.toLowerCase() === lower
-  );
-
-  // 2. Attempt Firestore query with 2500ms timeout
-  const firestoreQuery = async (): Promise<UserAccount | null> => {
-    try {
-      // Try email
-      const qEmail = query(
-        collection(db, USERS_COLLECTION),
-        where('email', '==', lower)
-      );
-      const emailSnap = await getDocs(qEmail);
-      if (!emailSnap.empty) {
-        const d = emailSnap.docs[0];
-        const account = { id: d.id, ...d.data() } as UserAccount;
-        // Sync local cache
-        const all = getLocalUsers().filter((u) => u.email !== account.email);
-        all.push(account);
-        saveLocalUsers(all);
-        return account;
-      }
-
-      // Try username
-      const qUser = query(
-        collection(db, USERS_COLLECTION),
-        where('username', '==', cleanId)
-      );
-      const userSnap = await getDocs(qUser);
-      if (!userSnap.empty) {
-        const d = userSnap.docs[0];
-        const account = { id: d.id, ...d.data() } as UserAccount;
-        const all = getLocalUsers().filter((u) => u.username !== account.username);
-        all.push(account);
-        saveLocalUsers(all);
-        return account;
-      }
-    } catch {
-      // Return local match on any Firestore issue
+  try {
+    // 1. Query Firestore by email
+    const qEmail = query(
+      collection(db, USERS_COLLECTION),
+      where('email', '==', lower)
+    );
+    const emailSnap = await getDocs(qEmail);
+    if (!emailSnap.empty) {
+      const d = emailSnap.docs[0];
+      return { id: d.id, ...d.data() } as UserAccount;
     }
-    return null;
-  };
 
-  const cloudUser = await withTimeout(firestoreQuery(), 2500, null);
-  return cloudUser || localMatch || null;
+    // 2. Query Firestore by username
+    const qUser = query(
+      collection(db, USERS_COLLECTION),
+      where('username', '==', cleanId)
+    );
+    const userSnap = await getDocs(qUser);
+    if (!userSnap.empty) {
+      const d = userSnap.docs[0];
+      return { id: d.id, ...d.data() } as UserAccount;
+    }
+  } catch (err) {
+    console.error('[Firestore] Error finding user in Firestore:', err);
+    throw err;
+  }
+
+  return null;
 }
 
 /**
- * Save a 6-digit verification code with 10-minute expiration
+ * Save a 6-digit verification code strictly to Firebase Firestore with 10-minute expiration
  */
 export async function saveVerificationCode(
   email: string,
@@ -383,24 +280,14 @@ export async function saveVerificationCode(
     expiresAt: expiresAt.toISOString(),
   };
 
-  // 1. Immediately save to local storage
-  const codes = getLocalCodes().filter(
-    (c) => !(c.email === cleanEmail && c.purpose === purpose)
-  );
-  codes.push(newRecord);
-  saveLocalCodes(codes);
-
-  // 2. Persist to Firestore with safety timeout
-  try {
-    const codeRef = doc(collection(db, VERIFICATION_COLLECTION));
-    await withTimeout(setDoc(codeRef, newRecord), 2500, null);
-  } catch {
-    // Local record handles this safely
-  }
+  // Persist directly to Firestore verification_codes collection
+  const codeRef = doc(collection(db, VERIFICATION_COLLECTION));
+  await setDoc(codeRef, newRecord);
+  console.log(`[Firestore] Verification code saved in Firestore for: ${cleanEmail}`);
 }
 
 /**
- * Validate verification code
+ * Validate verification code strictly against Firebase Firestore
  */
 export async function verifyCode(
   email: string,
@@ -410,84 +297,57 @@ export async function verifyCode(
   const cleanEmail = email.toLowerCase().trim();
   const cleanInput = inputCode.trim();
 
-  // 1. Check local codes first
-  const localCodes = getLocalCodes();
-  const localMatch = localCodes.find(
-    (c) => c.email === cleanEmail && c.purpose === purpose
-  );
-
-  if (localMatch) {
-    if (localMatch.code === cleanInput) {
-      const expires = new Date(localMatch.expiresAt).getTime();
-      if (Date.now() <= expires) {
-        // Clear code after successful verification
-        saveLocalCodes(localCodes.filter((c) => c !== localMatch));
-        return { success: true, message: 'تم التحقق بنجاح' };
-      }
-    }
-  }
-
-  // 2. Fallback to Firestore check with timeout
   try {
     const q = query(
       collection(db, VERIFICATION_COLLECTION),
       where('email', '==', cleanEmail),
       where('purpose', '==', purpose)
     );
-    const snap = await withTimeout(getDocs(q), 2500, null);
+    const snap = await getDocs(q);
 
-    if (snap && !snap.empty) {
+    if (!snap.empty) {
       for (const d of snap.docs) {
         const data = d.data() as VerificationCodeRecord;
         if (data.code === cleanInput) {
           const expires = new Date(data.expiresAt).getTime();
           if (Date.now() <= expires) {
-            deleteDoc(d.ref).catch(() => {});
-            return { success: true, message: 'تم التحقق بنجاح' };
+            // Delete used code from Firestore
+            await deleteDoc(d.ref).catch(() => {});
+            return { success: true, message: 'تم التحقق بنجاح من قاعدة بيانات Firebase' };
           }
         }
       }
     }
-  } catch {
-    // Handled
-  }
-
-  if (localMatch && localMatch.code !== cleanInput) {
-    return { success: false, message: 'رمز التحقق غير صحيح، يُرجى التأكد وإعادة المحاولة' };
+  } catch (err) {
+    console.error('[Firestore] Error verifying code in Firestore:', err);
+    throw err;
   }
 
   return { success: false, message: 'رمز التحقق غير صحيح أو انتهت صلاحيته' };
 }
 
 /**
- * Update user password
+ * Update user password strictly in Firebase Firestore
  */
 export async function updateUserPassword(email: string, newPassword: string): Promise<boolean> {
   const cleanEmail = email.toLowerCase().trim();
 
-  // 1. Update in local storage
-  const users = getLocalUsers();
-  const idx = users.findIndex((u) => u.email === cleanEmail);
-  if (idx !== -1) {
-    users[idx].password = newPassword;
-    saveLocalUsers(users);
-  }
-
-  // 2. Update in Firestore with timeout
   try {
     const q = query(
       collection(db, USERS_COLLECTION),
       where('email', '==', cleanEmail)
     );
-    const snap = await withTimeout(getDocs(q), 2500, null);
-    if (snap && !snap.empty) {
+    const snap = await getDocs(q);
+    if (!snap.empty) {
       const userDoc = snap.docs[0];
-      await withTimeout(setDoc(userDoc.ref, { password: newPassword }, { merge: true }), 2500, null);
+      await setDoc(userDoc.ref, { password: newPassword }, { merge: true });
+      console.log(`[Firestore] Password updated in Firestore for: ${cleanEmail}`);
       return true;
     }
-  } catch {
-    // Local update succeeded
+  } catch (err) {
+    console.error('[Firestore] Error updating user password in Firestore:', err);
+    throw err;
   }
 
-  return idx !== -1;
+  return false;
 }
