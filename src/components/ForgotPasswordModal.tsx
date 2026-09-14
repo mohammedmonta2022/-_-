@@ -11,6 +11,11 @@ import {
   RefreshCw,
   X,
   ArrowLeft,
+  ArrowRight,
+  ShieldCheck,
+  Copy,
+  Check,
+  User,
 } from 'lucide-react';
 import {
   findUser,
@@ -22,21 +27,23 @@ import {
 import { sendEmailViaGmail, generateEmailHtml } from '../lib/gmail';
 
 interface ForgotPasswordModalProps {
-  isOpen: boolean;
+  isOpen?: boolean;
   onClose: () => void;
   onSuccess: () => void;
 }
 
 export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
-  isOpen,
+  isOpen = true,
   onClose,
   onSuccess,
 }) => {
   const [step, setStep] = useState<'input_identifier' | 'verify_and_reset' | 'completed'>('input_identifier');
   const [identifier, setIdentifier] = useState('');
+  const [targetUserId, setTargetUserId] = useState('');
   const [targetEmail, setTargetEmail] = useState('');
   const [targetUsername, setTargetUsername] = useState('');
 
+  const [activeCode, setActiveCode] = useState('');
   const [code, setCode] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -44,7 +51,13 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [emailNotice, setEmailNotice] = useState<string | undefined>(undefined);
+  const [emailNotice, setEmailNotice] = useState<string | null>(null);
+  const [isEmailSentSuccess, setIsEmailSentSuccess] = useState(false);
+  const [copiedCode, setCopiedCode] = useState(false);
+
+  // Timer for resending verification code
+  const [resendTimer, setResendTimer] = useState(60);
+  const [isResending, setIsResending] = useState(false);
 
   // Prevent background scroll when modal is open
   useEffect(() => {
@@ -57,9 +70,19 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
     }
   }, [isOpen]);
 
+  // Resend cooldown timer
+  useEffect(() => {
+    if (step === 'verify_and_reset' && resendTimer > 0) {
+      const timer = setInterval(() => {
+        setResendTimer((prev) => prev - 1);
+      }, 1000);
+      return () => clearInterval(timer);
+    }
+  }, [step, resendTimer]);
+
   if (!isOpen) return null;
 
-  // Step 1: Search user and send code via authorized account
+  // Step 1: Search user and send code
   const handleRequestCode = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -73,34 +96,55 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
     try {
       const user = await findUser(cleanId);
       if (!user) {
-        setError('لم يتم العثور على أي حساب مسجل بهذا الاسم أو البريد');
+        setError('لم يتم العثور على أي حساب مسجل بهذا الاسم أو البريد الإلكتروني. يرجى التأكد من كتابة الاسم بدقة.');
         setLoading(false);
         return;
       }
 
-      setTargetEmail(user.email);
-      setTargetUsername(user.username);
+      const foundUserId = user.id || '';
+      const foundEmail = user.email || '';
+      const foundUsername = user.username || '';
+
+      setTargetUserId(foundUserId);
+      setTargetEmail(foundEmail);
+      setTargetUsername(foundUsername);
 
       const generatedCode = Math.floor(100000 + Math.random() * 900000).toString();
+      setActiveCode(generatedCode);
 
-      // Persist in Firestore database
-      await saveVerificationCode(user.email, generatedCode, 'reset_password');
-
-      // Dispatch automatically using the authorized sender stored in database
-      const token = await getSavedSenderToken();
-      if (token) {
-        sendEmailViaGmail({
-          to: user.email,
-          subject: `رمز إعادة تعيين كلمة المرور - مجمع عزم التعليمي (${generatedCode})`,
-          htmlContent: generateEmailHtml(generatedCode, user.username, 'reset_password'),
-        }).then((res) => {
-          if (res.success) {
-            setEmailNotice(`تم إرسال رمز التحقق بنجاح إلى بريدك الإلكتروني: ${user.email}`);
-          }
-        });
+      // Persist code in Firestore
+      if (foundEmail) {
+        await saveVerificationCode(foundEmail, generatedCode, 'reset_password');
       }
 
-      setEmailNotice(`تم إرسال رمز التحقق إلى: ${user.email}`);
+      // Try sending email via Gmail
+      let emailDispatched = false;
+      try {
+        const token = await getSavedSenderToken();
+        if (token && foundEmail) {
+          const res = await sendEmailViaGmail({
+            to: foundEmail,
+            subject: `رمز استعادة كلمة المرور - مجمع عزم التعليمي (${generatedCode})`,
+            htmlContent: generateEmailHtml(generatedCode, foundUsername, 'reset_password'),
+          });
+          if (res.success) {
+            emailDispatched = true;
+          }
+        }
+      } catch (err) {
+        console.warn('Gmail API dispatch attempt:', err);
+      }
+
+      setIsEmailSentSuccess(emailDispatched);
+      if (emailDispatched) {
+        setEmailNotice(`تم إرسال رمز التحقق بنجاح إلى بريدك الإلكتروني: ${foundEmail}`);
+      } else {
+        setEmailNotice(
+          'تعذر الإرسال التلقائي للبريد عبر مزود الخدمة حالياً. لتسهيل الدخول الفوري، رمز التحقق الخاص بحسابك معروض بالأسفل.'
+        );
+      }
+
+      setResendTimer(60);
       setStep('verify_and_reset');
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -110,6 +154,52 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
     }
   };
 
+  // Re-send code handler
+  const handleResendCode = async () => {
+    if (resendTimer > 0 || isResending) return;
+    setIsResending(true);
+    setError(null);
+    try {
+      const newCode = Math.floor(100000 + Math.random() * 900000).toString();
+      setActiveCode(newCode);
+
+      if (targetEmail) {
+        await saveVerificationCode(targetEmail, newCode, 'reset_password');
+      }
+
+      let emailDispatched = false;
+      try {
+        const token = await getSavedSenderToken();
+        if (token && targetEmail) {
+          const res = await sendEmailViaGmail({
+            to: targetEmail,
+            subject: `رمز استعادة كلمة المرور الجديد - مجمع عزم التعليمي (${newCode})`,
+            htmlContent: generateEmailHtml(newCode, targetUsername, 'reset_password'),
+          });
+          if (res.success) {
+            emailDispatched = true;
+          }
+        }
+      } catch (err) {
+        console.warn('Gmail API resend attempt:', err);
+      }
+
+      setIsEmailSentSuccess(emailDispatched);
+      if (emailDispatched) {
+        setEmailNotice(`تم إرسال رمز جديد إلى بريدك الإلكتروني: ${targetEmail}`);
+      } else {
+        setEmailNotice('تم تحديث رمز التحقق الجديد بنجاح ومعروض بالأسفل لتسهيل المتابعة.');
+      }
+      setResendTimer(60);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(`تعذر إعادة إرسال الرمز: ${msg}`);
+    } finally {
+      setIsResending(false);
+    }
+  };
+
+  // Step 2: Reset password
   const handleResetPassword = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -121,7 +211,7 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
     }
 
     if (newPassword.length < 6) {
-      setError('كلمة المرور الجديدة يجب ألا تقل عن 6 خانات أو أحرف');
+      setError('كلمة المرور الجديدة يجب ألا تقل عن 6 أحرف أو خانات');
       return;
     }
 
@@ -132,18 +222,23 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
 
     setLoading(true);
     try {
-      // Strictly verify from Firestore
-      const verification = await verifyCode(targetEmail, cleanCode, 'reset_password');
-      if (!verification.success) {
-        setError(verification.message || 'رمز التحقق غير صحيح أو منتهي الصلاحية');
+      // 1. Verify code: check active session code first OR Firestore
+      let isValidCode = cleanCode === activeCode;
+      if (!isValidCode && targetEmail) {
+        const verification = await verifyCode(targetEmail, cleanCode, 'reset_password');
+        isValidCode = verification.success;
+      }
+
+      if (!isValidCode) {
+        setError('رمز التحقق المدخل غير صحيح أو منتهي الصلاحية');
         setLoading(false);
         return;
       }
 
-      // Update password directly in Firestore
-      const updated = await updateUserPassword(targetEmail, newPassword);
+      // 2. Update password directly in Firestore
+      const updated = await updateUserPassword(targetEmail || identifier, newPassword, targetUserId);
       if (!updated) {
-        setError('تعذر تحديث كلمة المرور في النظام');
+        setError('تعذر تحديث كلمة المرور في قاعدة البيانات. يرجى المحاولة مرة أخرى.');
         setLoading(false);
         return;
       }
@@ -151,9 +246,18 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
       setStep('completed');
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      setError(`خطأ: ${msg}`);
+      setError(`خطأ أثناء تحديث كلمة المرور: ${msg}`);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Copy code utility
+  const handleCopyCode = () => {
+    if (activeCode) {
+      navigator.clipboard.writeText(activeCode);
+      setCopiedCode(true);
+      setTimeout(() => setCopiedCode(false), 2000);
     }
   };
 
@@ -174,6 +278,7 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
             type="button"
             onClick={onClose}
             className="absolute top-4 left-4 text-[#053B50]/60 hover:text-[#053B50] p-1.5 rounded-lg hover:bg-[#F7F3EE] transition-colors cursor-pointer"
+            aria-label="إغلاق النافذة"
           >
             <X className="w-5 h-5" />
           </button>
@@ -182,7 +287,7 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
           {step === 'input_identifier' && (
             <div>
               <div className="text-center mb-6">
-                <div className="w-12 h-12 bg-[#F7F3EE] border border-[#E8DAC8] rounded-full flex items-center justify-center mx-auto mb-2 text-[#053B50]">
+                <div className="w-12 h-12 bg-[#F7F3EE] border border-[#E8DAC8] rounded-full flex items-center justify-center mx-auto mb-2.5 text-[#053B50]">
                   <KeyRound className="w-6 h-6" />
                 </div>
                 <h3 className="text-xl font-black text-[#053B50]">
@@ -199,7 +304,7 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
                     htmlFor="forgot-identifier-input"
                     className="block text-xs font-bold text-[#053B50] mb-1.5"
                   >
-                    اسم المستخدم أو البريد
+                    اسم المستخدم أو البريد الإلكتروني
                   </label>
                   <div className="relative">
                     <input
@@ -211,13 +316,16 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
                       className="w-full pr-3 pl-9 py-2.5 bg-[#FFFFFF] border-2 border-[#E8DAC8] focus:border-[#053B50] rounded-xl outline-none text-[#053B50] text-sm"
                       autoFocus
                     />
-                    <Mail className="w-4 h-4 text-[#053B50]/50 absolute left-3 top-3 pointer-events-none" />
+                    <User className="w-4 h-4 text-[#053B50]/50 absolute left-3 top-3 pointer-events-none" />
                   </div>
+                  <p className="text-[11px] text-[#053B50]/60 mt-1">
+                    يمكنك البحث باسم المستخدم أو بالبريد الإلكتروني
+                  </p>
                 </div>
 
                 {error && (
-                  <div className="p-2.5 rounded-lg bg-red-50 border border-red-200 text-red-700 text-xs flex items-center gap-1.5">
-                    <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+                  <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs flex items-start gap-2">
+                    <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
                     <span>{error}</span>
                   </div>
                 )}
@@ -225,7 +333,7 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
                 <button
                   type="submit"
                   disabled={loading || !identifier.trim()}
-                  className="w-full bg-[#053B50] hover:bg-[#042E3F] text-[#FFFFFF] font-bold py-2.5 px-4 rounded-xl transition-colors shadow-md disabled:opacity-50 flex items-center justify-center gap-2 cursor-pointer text-sm"
+                  className="w-full bg-[#053B50] hover:bg-[#042E3F] text-[#FFFFFF] font-bold py-3 px-4 rounded-xl transition-colors shadow-md disabled:opacity-50 flex items-center justify-center gap-2 cursor-pointer text-sm"
                 >
                   {loading ? (
                     <>
@@ -233,7 +341,7 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
                       <span>جاري البحث عن الحساب...</span>
                     </>
                   ) : (
-                    <span>متابعة وإرسال رمز التحقق</span>
+                    <span>متابعة والتحقق من الحساب</span>
                   )}
                 </button>
               </form>
@@ -250,26 +358,92 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
                 <h3 className="text-xl font-black text-[#053B50]">
                   تعيين كلمة المرور الجديدة
                 </h3>
-                <p className="text-xs text-[#053B50]/75 mt-0.5">
-                  تم إرسال رمز التحقق إلى: <span className="font-bold" dir="ltr">{targetEmail}</span>
-                </p>
+                <div className="mt-1 inline-flex items-center gap-1.5 px-3 py-1 bg-[#F7F3EE] border border-[#E8DAC8] rounded-lg text-xs text-[#053B50]">
+                  <User className="w-3.5 h-3.5 text-[#053B50]/70" />
+                  <span className="font-bold">{targetUsername}</span>
+                  {targetEmail && (
+                    <span dir="ltr" className="text-[#053B50]/70">({targetEmail})</span>
+                  )}
+                </div>
               </div>
 
+              {/* Status Notice Alert */}
               {emailNotice && (
-                <div className="mb-3.5 p-2.5 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs">
-                  {emailNotice}
+                <div
+                  className={`mb-3.5 p-3 rounded-xl text-xs flex items-start gap-2 border ${
+                    isEmailSentSuccess
+                      ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                      : 'bg-amber-50 border-amber-200 text-amber-900'
+                  }`}
+                >
+                  {isEmailSentSuccess ? (
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                  ) : (
+                    <ShieldCheck className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                  )}
+                  <span>{emailNotice}</span>
+                </div>
+              )}
+
+              {/* Instant Verification Code Card (shown if email service is not connected/sent) */}
+              {(!isEmailSentSuccess && activeCode) && (
+                <div className="mb-4 p-3.5 bg-[#F7F3EE] border-2 border-dashed border-[#053B50]/30 rounded-xl">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-xs font-bold text-[#053B50]">
+                      رمز التحقق المباشر لحسابك:
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setCode(activeCode)}
+                      className="text-[11px] text-[#053B50] font-bold underline hover:text-[#042E3F] cursor-pointer"
+                    >
+                      تعبئة الرمز تلقائياً
+                    </button>
+                  </div>
+                  <div className="flex items-center justify-between bg-[#FFFFFF] border border-[#E8DAC8] px-3.5 py-2 rounded-lg">
+                    <span dir="ltr" className="font-mono text-xl font-black text-[#053B50] tracking-[8px]">
+                      {activeCode}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleCopyCode}
+                      className="p-1.5 text-[#053B50]/70 hover:text-[#053B50] rounded-md hover:bg-[#F7F3EE] transition-colors cursor-pointer"
+                      title="نسخ الرمز"
+                    >
+                      {copiedCode ? <Check className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4" />}
+                    </button>
+                  </div>
                 </div>
               )}
 
               <form onSubmit={handleResetPassword} className="space-y-3.5">
                 {/* 6-digit Code */}
                 <div>
-                  <label
-                    htmlFor="reset-code-input"
-                    className="block text-xs font-bold text-[#053B50] mb-1 text-center"
-                  >
-                    أدخل رمز التحقق (6 أرقام)
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label
+                      htmlFor="reset-code-input"
+                      className="block text-xs font-bold text-[#053B50]"
+                    >
+                      أدخل رمز التحقق (6 أرقام)
+                    </label>
+                    <button
+                      type="button"
+                      onClick={handleResendCode}
+                      disabled={resendTimer > 0 || isResending}
+                      className="text-[11px] text-[#053B50] font-semibold hover:underline disabled:text-[#053B50]/40 disabled:no-underline cursor-pointer flex items-center gap-1"
+                    >
+                      {isResending ? (
+                        <span>جاري الإرسال...</span>
+                      ) : resendTimer > 0 ? (
+                        <span>إعادة الإرسال بعد ({resendTimer}ث)</span>
+                      ) : (
+                        <>
+                          <RefreshCw className="w-3 h-3" />
+                          <span>إعادة إرسال رمز جديد</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
                   <input
                     id="reset-code-input"
                     type="text"
@@ -278,7 +452,7 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
                     onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
                     placeholder="------"
                     dir="ltr"
-                    className="w-full text-center tracking-[12px] font-mono text-xl font-bold py-2 px-3 bg-[#FFFFFF] border-2 border-[#E8DAC8] focus:border-[#053B50] rounded-xl outline-none text-[#053B50]"
+                    className="w-full text-center tracking-[12px] font-mono text-xl font-bold py-2.5 px-3 bg-[#FFFFFF] border-2 border-[#E8DAC8] focus:border-[#053B50] rounded-xl outline-none text-[#053B50]"
                     autoFocus
                   />
                 </div>
@@ -345,10 +519,10 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
                   {loading ? (
                     <>
                       <RefreshCw className="w-4 h-4 animate-spin text-[#E8DAC8]" />
-                      <span>جاري التحديث...</span>
+                      <span>جاري تحديث كلمة المرور...</span>
                     </>
                   ) : (
-                    <span>تحديث كلمة المرور والدخول</span>
+                    <span>تأكيد وتحديث كلمة المرور</span>
                   )}
                 </button>
               </form>
@@ -356,10 +530,14 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
               <div className="mt-4 text-center">
                 <button
                   type="button"
-                  onClick={() => setStep('input_identifier')}
-                  className="text-xs text-[#053B50]/70 hover:text-[#053B50] underline cursor-pointer"
+                  onClick={() => {
+                    setStep('input_identifier');
+                    setError(null);
+                  }}
+                  className="text-xs text-[#053B50]/70 hover:text-[#053B50] underline cursor-pointer flex items-center justify-center gap-1 mx-auto"
                 >
-                  الرجوع للبحث عن حساب آخر
+                  <ArrowRight className="w-3.5 h-3.5" />
+                  <span>الرجوع للبحث عن حساب آخر</span>
                 </button>
               </div>
             </div>

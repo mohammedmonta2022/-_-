@@ -441,13 +441,15 @@ export async function getAllUsers(): Promise<UserAccount[]> {
 }
 
 /**
- * Find user strictly in Firebase Firestore
+ * Find user strictly in Firebase Firestore with case-insensitive and trimmed fallback
  */
 export async function findUser(identifier: string): Promise<UserAccount | null> {
   const cleanId = identifier.trim();
+  if (!cleanId) return null;
   const cleanEmail = cleanId.toLowerCase();
 
   try {
+    // 1. Direct query by exact lowercase email
     const qEmail = query(
       collection(db, USERS_COLLECTION),
       where('email', '==', cleanEmail)
@@ -458,6 +460,7 @@ export async function findUser(identifier: string): Promise<UserAccount | null> 
       return { id: d.id, ...d.data() } as UserAccount;
     }
 
+    // 2. Direct query by exact username
     const qUser = query(
       collection(db, USERS_COLLECTION),
       where('username', '==', cleanId)
@@ -466,6 +469,23 @@ export async function findUser(identifier: string): Promise<UserAccount | null> 
     if (!userSnap.empty) {
       const d = userSnap.docs[0];
       return { id: d.id, ...d.data() } as UserAccount;
+    }
+
+    // 3. Robust fallback: scan users collection for case-insensitive matching
+    const allUsersSnap = await getDocs(collection(db, USERS_COLLECTION));
+    const matchedDoc = allUsersSnap.docs.find((d) => {
+      const data = d.data() as UserAccount;
+      const uEmail = (data.email || '').trim().toLowerCase();
+      const uName = (data.username || '').trim();
+      return (
+        uEmail === cleanEmail ||
+        uName.toLowerCase() === cleanId.toLowerCase() ||
+        uName === cleanId
+      );
+    });
+
+    if (matchedDoc) {
+      return { id: matchedDoc.id, ...matchedDoc.data() } as UserAccount;
     }
   } catch (err) {
     console.error('[Firestore] Error finding user in Firestore:', err);
@@ -541,10 +561,23 @@ export async function verifyCode(
 /**
  * Update user password strictly in Firebase Firestore
  */
-export async function updateUserPassword(email: string, newPassword: string): Promise<boolean> {
-  const cleanEmail = email.toLowerCase().trim();
-
+export async function updateUserPassword(
+  emailOrIdentifier: string,
+  newPassword: string,
+  userId?: string
+): Promise<boolean> {
   try {
+    // 1. If direct user ID is provided, update document directly
+    if (userId) {
+      const directDoc = doc(db, USERS_COLLECTION, userId);
+      await setDoc(directDoc, { password: newPassword }, { merge: true });
+      return true;
+    }
+
+    const clean = emailOrIdentifier.trim();
+    const cleanEmail = clean.toLowerCase();
+
+    // 2. Query by email
     const q = query(
       collection(db, USERS_COLLECTION),
       where('email', '==', cleanEmail)
@@ -553,6 +586,33 @@ export async function updateUserPassword(email: string, newPassword: string): Pr
     if (!snap.empty) {
       const userDoc = snap.docs[0];
       await setDoc(userDoc.ref, { password: newPassword }, { merge: true });
+      return true;
+    }
+
+    // 3. Query by username
+    const qUser = query(
+      collection(db, USERS_COLLECTION),
+      where('username', '==', clean)
+    );
+    const userSnap = await getDocs(qUser);
+    if (!userSnap.empty) {
+      const userDoc = userSnap.docs[0];
+      await setDoc(userDoc.ref, { password: newPassword }, { merge: true });
+      return true;
+    }
+
+    // 4. Fallback: search all users and update matching user
+    const allUsersSnap = await getDocs(collection(db, USERS_COLLECTION));
+    const matchedDoc = allUsersSnap.docs.find((d) => {
+      const data = d.data() as UserAccount;
+      return (
+        (data.email || '').trim().toLowerCase() === cleanEmail ||
+        (data.username || '').trim().toLowerCase() === clean.toLowerCase()
+      );
+    });
+
+    if (matchedDoc) {
+      await setDoc(matchedDoc.ref, { password: newPassword }, { merge: true });
       return true;
     }
   } catch (err) {

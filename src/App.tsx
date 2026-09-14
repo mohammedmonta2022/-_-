@@ -254,6 +254,7 @@ export default function App() {
       {/* Forgot Password Modal */}
       {showForgotModal && (
         <ForgotPasswordModal
+          isOpen={showForgotModal}
           onClose={() => setShowForgotModal(false)}
           onSuccess={() => {
             setShowForgotModal(false);
