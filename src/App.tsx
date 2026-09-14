@@ -11,15 +11,49 @@ import { LoginForm } from './components/LoginForm';
 import { RegisterForm } from './components/RegisterForm';
 import { ForgotPasswordModal } from './components/ForgotPasswordModal';
 import { WelcomeDashboard } from './components/WelcomeDashboard';
-import { getSystemConfig } from './lib/firebase';
+import { getSystemConfig, findUser } from './lib/firebase';
 import type { UserAccount, AuthTab } from './types';
+
+const STORAGE_KEY_AUTH_USER = 'azm_auth_user_session';
 
 export default function App() {
   const [currentTab, setCurrentTab] = useState<AuthTab>('login');
-  const [currentUser, setCurrentUser] = useState<UserAccount | null>(null);
+  // Initialize currentUser from localStorage for instant, permanent persistence
+  const [currentUser, setCurrentUser] = useState<UserAccount | null>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_AUTH_USER);
+      if (saved) {
+        return JSON.parse(saved) as UserAccount;
+      }
+    } catch (e) {
+      console.error('Error reading saved session from localStorage:', e);
+    }
+    return null;
+  });
+
   const [showForgotModal, setShowForgotModal] = useState(false);
   const [registrationNotice, setRegistrationNotice] = useState<string | null>(null);
   const [allowPublicRegistration, setAllowPublicRegistration] = useState(true);
+
+  // Sync saved session with Firestore to ensure roles and state are fresh
+  useEffect(() => {
+    if (currentUser?.username) {
+      findUser(currentUser.username)
+        .then((latest) => {
+          if (latest) {
+            setCurrentUser(latest);
+            try {
+              localStorage.setItem(STORAGE_KEY_AUTH_USER, JSON.stringify(latest));
+            } catch (err) {
+              console.warn('Failed to update localStorage session:', err);
+            }
+          }
+        })
+        .catch((err) => {
+          console.warn('Session background sync error:', err);
+        });
+    }
+  }, []);
 
   useEffect(() => {
     async function checkPublicRegistration() {
@@ -42,10 +76,20 @@ export default function App() {
 
   const handleLoginSuccess = (user: UserAccount) => {
     setCurrentUser(user);
+    try {
+      localStorage.setItem(STORAGE_KEY_AUTH_USER, JSON.stringify(user));
+    } catch (err) {
+      console.warn('Failed to save session to localStorage:', err);
+    }
     setRegistrationNotice(null);
   };
 
   const handleLogout = () => {
+    try {
+      localStorage.removeItem(STORAGE_KEY_AUTH_USER);
+    } catch (err) {
+      console.warn('Failed to remove session from localStorage:', err);
+    }
     setCurrentUser(null);
   };
 

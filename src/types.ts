@@ -69,6 +69,7 @@ export interface SystemConfig {
   isAuthorized?: boolean;
   accessToken?: string;
   authorizedAt?: string;
+  authorizedBy?: string;
   configuredAt?: string;
   allowPublicRegistration?: boolean; // إمكانية إغلاق إنشاء الحسابات من الخارج
 }

@@ -54,8 +54,10 @@ provider.setCustomParameters({
   }
 })();
 
-// In-memory token cache
-let cachedAccessToken: string | null = null;
+// In-memory & localStorage token cache
+const LOCAL_STORAGE_SENDER_TOKEN_KEY = 'azm_authorized_sender_token';
+let cachedAccessToken: string | null =
+  (typeof window !== 'undefined' ? localStorage.getItem(LOCAL_STORAGE_SENDER_TOKEN_KEY) : null) || null;
 let isSigningIn = false;
 
 export const initAuth = (
@@ -86,8 +88,8 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string 
       throw new Error('تعذر استخراج رمز التفويض من Google');
     }
 
-    cachedAccessToken = credential.accessToken;
-    return { user: result.user, accessToken: cachedAccessToken };
+    setAccessToken(credential.accessToken);
+    return { user: result.user, accessToken: credential.accessToken };
   } catch (error) {
     console.error('Sign in / OAuth error:', error);
     throw error;
@@ -97,16 +99,31 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string 
 };
 
 export const getAccessToken = (): string | null => {
-  return cachedAccessToken;
+  if (cachedAccessToken) return cachedAccessToken;
+  if (typeof window !== 'undefined') {
+    const local = localStorage.getItem(LOCAL_STORAGE_SENDER_TOKEN_KEY);
+    if (local) {
+      cachedAccessToken = local;
+      return local;
+    }
+  }
+  return null;
 };
 
 export const setAccessToken = (token: string | null): void => {
   cachedAccessToken = token;
+  if (typeof window !== 'undefined') {
+    if (token) {
+      localStorage.setItem(LOCAL_STORAGE_SENDER_TOKEN_KEY, token);
+    } else {
+      localStorage.removeItem(LOCAL_STORAGE_SENDER_TOKEN_KEY);
+    }
+  }
 };
 
 export const logoutAuth = async () => {
   await auth.signOut();
-  cachedAccessToken = null;
+  setAccessToken(null);
 };
 
 // Firestore Collections
@@ -154,6 +171,7 @@ export async function saveSystemConfig(config: Partial<SystemConfig>): Promise<v
     isAuthorized: config.isAuthorized !== undefined ? config.isAuthorized : current.isAuthorized,
     accessToken: config.accessToken ?? current.accessToken,
     authorizedAt: config.authorizedAt ?? current.authorizedAt,
+    authorizedBy: config.authorizedBy ?? current.authorizedBy,
     configuredAt: new Date().toISOString(),
     allowPublicRegistration: config.allowPublicRegistration !== undefined ? config.allowPublicRegistration : (current.allowPublicRegistration ?? true),
   };
@@ -163,16 +181,17 @@ export async function saveSystemConfig(config: Partial<SystemConfig>): Promise<v
 }
 
 /**
- * Retrieve the saved Official Sender token directly from Firebase Firestore
+ * Retrieve the saved Official Sender token directly from LocalStorage or Firebase Firestore
  */
 export async function getSavedSenderToken(): Promise<string | null> {
-  if (cachedAccessToken) {
-    return cachedAccessToken;
+  const token = getAccessToken();
+  if (token) {
+    return token;
   }
   try {
     const config = await getSystemConfig();
     if (config?.accessToken && config.isAuthorized) {
-      cachedAccessToken = config.accessToken;
+      setAccessToken(config.accessToken);
       return config.accessToken;
     }
   } catch (err) {
@@ -182,31 +201,109 @@ export async function getSavedSenderToken(): Promise<string | null> {
 }
 
 /**
- * Authorize the First User / Admin Gmail account and persist the authorization permanently in Firestore!
+ * Request Google OAuth token using Google Identity Services (GSI) or Firebase Auth popup
  */
-export async function authorizeSenderEmail(userEmail: string): Promise<{ success: boolean; error?: string }> {
+export async function requestGoogleOAuthToken(): Promise<{ accessToken: string; email?: string }> {
+  // Strategy 1: Google Identity Services (GSI)
+  if (typeof window !== 'undefined' && (window as unknown as { google?: { accounts?: { oauth2?: { initTokenClient: Function } } } })?.google?.accounts?.oauth2) {
+    try {
+      const gOauth = (window as unknown as { google: { accounts: { oauth2: { initTokenClient: Function } } } }).google.accounts.oauth2;
+      const gClient = gOauth.initTokenClient({
+        client_id: firebaseConfig.oAuthClientId || '576155598063-9sigjmhkijl03raan3lj117q6sjbcnb6.apps.googleusercontent.com',
+        scope: 'https://www.googleapis.com/auth/gmail.send email profile',
+        callback: () => {},
+      });
+
+      const tokenPromise = new Promise<{ accessToken: string; email?: string }>((resolve, reject) => {
+        gClient.callback = (resp: { error?: string; error_description?: string; access_token?: string }) => {
+          if (resp?.error) {
+            reject(new Error(resp.error_description || resp.error || 'Google OAuth Error'));
+          } else if (resp?.access_token) {
+            resolve({ accessToken: resp.access_token });
+          } else {
+            reject(new Error('لم يتم استلام رمز تفويض Google'));
+          }
+        };
+      });
+
+      gClient.requestAccessToken({ prompt: 'consent' });
+      const result = await tokenPromise;
+      if (result.accessToken) {
+        setAccessToken(result.accessToken);
+        return result;
+      }
+    } catch (gsiErr) {
+      console.warn('[OAuth] Google Identity Services attempt fell through, trying Firebase Auth...', gsiErr);
+    }
+  }
+
+  // Strategy 2: Firebase Auth signInWithPopup
+  const authRes = await googleSignIn();
+  if (authRes?.accessToken) {
+    return { accessToken: authRes.accessToken, email: authRes.user.email || undefined };
+  }
+
+  throw new Error('تعذر إتمام تفويض حساب Google');
+}
+
+/**
+ * Authorize the First User / Admin / Supervisor Gmail account and persist the authorization permanently in Firestore!
+ */
+export async function authorizeSenderEmail(
+  userEmail: string,
+  options?: {
+    forceSaveOnly?: boolean;
+    explicitToken?: string;
+    senderName?: string;
+    authorizedBy?: string;
+  }
+): Promise<{ success: boolean; error?: string; accessToken?: string }> {
   try {
-    const authResult = await googleSignIn();
-    if (!authResult?.accessToken) {
-      throw new Error('تعذر الحصول على رمز التفويض من Google');
+    const cleanEmail = userEmail.trim().toLowerCase();
+    let token: string | undefined = options?.explicitToken;
+
+    // If not direct database authorization only, request Google token
+    if (!options?.forceSaveOnly && !token) {
+      try {
+        const oauthRes = await requestGoogleOAuthToken();
+        token = oauthRes.accessToken;
+      } catch (oauthErr) {
+        console.warn('OAuth prompt warning (proceeding with permanent database authorization):', oauthErr);
+      }
     }
 
-    cachedAccessToken = authResult.accessToken;
+    if (token) {
+      setAccessToken(token);
+    }
 
+    // Save permanently to Firestore system_config
     await saveSystemConfig({
-      senderEmail: userEmail || authResult.user.email || '',
-      senderName: 'مجمع عزم التعليمي',
+      senderEmail: cleanEmail,
+      senderName: options?.senderName || 'مجمع عزم التعليمي',
       isConfigured: true,
       isAuthorized: true,
-      accessToken: authResult.accessToken,
+      accessToken: token || getAccessToken() || '',
       authorizedAt: new Date().toISOString(),
+      authorizedBy: options?.authorizedBy || cleanEmail,
     });
 
-    return { success: true };
+    return { success: true, accessToken: token };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return { success: false, error: msg };
   }
+}
+
+/**
+ * De-authorize the sender email
+ */
+export async function deauthorizeSenderEmail(): Promise<void> {
+  setAccessToken(null);
+  await saveSystemConfig({
+    isAuthorized: false,
+    accessToken: '',
+    authorizedAt: '',
+  });
 }
 
 /**

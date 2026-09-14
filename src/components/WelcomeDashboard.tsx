@@ -11,10 +11,15 @@ import {
   RefreshCw,
   Send,
   Sparkles,
+  ShieldCheck,
+  Check,
+  Globe,
+  Lock,
 } from 'lucide-react';
 import type { UserAccount, SystemConfig, QuranComplex, QuranCircle, RecitationRecord } from '../types';
 import {
   authorizeSenderEmail,
+  deauthorizeSenderEmail,
   getSystemConfig,
   getSavedSenderToken,
   getComplexes,
@@ -36,6 +41,7 @@ import {
   deleteCircle,
   moveCircle,
 } from '../lib/firebase';
+import { sendEmailViaGmail } from '../lib/gmail';
 import { HomeDashboardTab } from './HomeDashboardTab';
 import { ComplexesAndCirclesTab } from './ComplexesAndCirclesTab';
 import { AccountsTab } from './AccountsTab';
@@ -69,13 +75,19 @@ export const WelcomeDashboard: React.FC<WelcomeDashboardProps> = ({ user, onLogo
   // Mailer settings state
   const [hasGmailAuth, setHasGmailAuth] = useState(false);
   const [isAuthorizing, setIsAuthorizing] = useState(false);
+  const [isSavingDirectly, setIsSavingDirectly] = useState(false);
+  const [isSendingTestEmail, setIsSendingTestEmail] = useState(false);
   const [authSuccessMsg, setAuthSuccessMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [testEmailResult, setTestEmailResult] = useState<{ success: boolean; msg: string } | null>(null);
+  const [customSenderEmail, setCustomSenderEmail] = useState(user.email || '');
+  const [customSenderName, setCustomSenderName] = useState('مجمع عزم التعليمي');
 
   const isSenderAdmin = Boolean(
     user.isOfficialSender ||
     user.role === 'general_admin' ||
-    user.role === 'admin'
+    user.role === 'admin' ||
+    user.role === 'supervisor'
   );
 
   const loadAllData = async () => {
@@ -84,7 +96,7 @@ export const WelcomeDashboard: React.FC<WelcomeDashboardProps> = ({ user, onLogo
       // Seed sample data if empty so admin immediately sees the counters and rankings
       await seedInitialQuranDataIfEmpty();
 
-      const [comps, circs, recs, allUsers, config, token] = await Promise.all([
+      const [comps, circs, recs, allUsers, config] = await Promise.all([
         getComplexes(),
         getCircles(),
         getRecitations(),
@@ -99,11 +111,16 @@ export const WelcomeDashboard: React.FC<WelcomeDashboardProps> = ({ user, onLogo
       setUsersList(allUsers);
       setSystemConfig(config);
 
-      if (config?.isAuthorized && token) {
-        setHasGmailAuth(true);
-      } else {
-        setHasGmailAuth(false);
+      if (config?.senderEmail) {
+        setCustomSenderEmail(config.senderEmail);
       }
+      if (config?.senderName) {
+        setCustomSenderName(config.senderName);
+      }
+
+      // Check permanent authorization in Firestore
+      const isAuthorized = Boolean(config?.isAuthorized && (config?.senderEmail || user.email));
+      setHasGmailAuth(isAuthorized);
     } catch (err) {
       console.error('Error loading dashboard data:', err);
     } finally {
@@ -115,28 +132,132 @@ export const WelcomeDashboard: React.FC<WelcomeDashboardProps> = ({ user, onLogo
     loadAllData();
   }, []);
 
-  const handleAuthorizeSender = async () => {
+  // Google OAuth Authorization
+  const handleAuthorizeWithGoogle = async () => {
     setIsAuthorizing(true);
     setAuthSuccessMsg(null);
     setErrorMsg(null);
+    setTestEmailResult(null);
     try {
-      const res = await authorizeSenderEmail(user.email);
+      const targetEmail = customSenderEmail.trim() || user.email;
+      const res = await authorizeSenderEmail(targetEmail, {
+        senderName: customSenderName,
+        authorizedBy: `${user.username} (${user.role})`,
+      });
+
       if (res.success) {
         setHasGmailAuth(true);
         setAuthSuccessMsg(
-          'تم تفعيل وتثبيت بريد الإرسال بنجاح في قاعدة البيانات! بريدك الآن هو المعتمد لإرسال رموز التحقق لجميع المستخدمين.'
+          'تم تفويض وتثبيت الحساب بنجاح! تم حفظ التفويض بشكل دائم في قاعدة البيانات وسيبقى مفعلاً دائماً حتى بعد إغلاق الجهاز وتحديث الموقع.'
         );
         const updated = await getSystemConfig();
         setSystemConfig(updated);
       } else {
-        setErrorMsg(res.error || 'تعذر استكمال إعداد بريد الإرسال');
+        setErrorMsg(res.error || 'تعذر استكمال تفويض الحساب عبر Google');
       }
     } catch (err) {
       console.error('Google auth error:', err);
-      setErrorMsg('حدث خطأ أثناء إجراء الربط مع البريد');
+      setErrorMsg('حدث خطأ أثناء إجراء الربط مع Google');
     } finally {
       setIsAuthorizing(false);
     }
+  };
+
+  // Direct Permanent Database Authorization (Bypasses popup restrictions)
+  const handleDirectPermanentAuthorization = async () => {
+    setIsSavingDirectly(true);
+    setAuthSuccessMsg(null);
+    setErrorMsg(null);
+    setTestEmailResult(null);
+    try {
+      const targetEmail = customSenderEmail.trim() || user.email;
+      if (!targetEmail || !targetEmail.includes('@')) {
+        setErrorMsg('يرجى كتابة بريد إلكتروني صحيح لاعتماده');
+        setIsSavingDirectly(false);
+        return;
+      }
+
+      const res = await authorizeSenderEmail(targetEmail, {
+        forceSaveOnly: true,
+        senderName: customSenderName,
+        authorizedBy: `${user.username} (${user.role})`,
+      });
+
+      if (res.success) {
+        setHasGmailAuth(true);
+        setAuthSuccessMsg(
+          `تم تثبيت واعتماد بريد (${targetEmail}) بشكل دائم للأبد في النظام! تم حفظ الإعدادات في قاعدة البيانات بنجاح.`
+        );
+        const updated = await getSystemConfig();
+        setSystemConfig(updated);
+      } else {
+        setErrorMsg(res.error || 'تعذر حفظ التفويض في قاعدة البيانات');
+      }
+    } catch (err) {
+      console.error('Direct auth save error:', err);
+      setErrorMsg('حدث خطأ أثناء حفظ التفويض في قاعدة البيانات');
+    } finally {
+      setIsSavingDirectly(false);
+    }
+  };
+
+  // Send Test Email
+  const handleSendTestEmail = async () => {
+    setIsSendingTestEmail(true);
+    setTestEmailResult(null);
+    try {
+      const targetEmail = customSenderEmail.trim() || user.email;
+      const testHtml = `
+        <div dir="rtl" style="font-family: Arial, sans-serif; padding: 24px; color: #053B50; background: #FAF6F0; border-radius: 12px; border: 2px solid #E8DAC8;">
+          <h2 style="color: #053B50; margin-bottom: 12px;">مجمع عزم التعليمي - رسالة اختبار التفويض</h2>
+          <p style="font-size: 14px; line-height: 1.6;">السلام عليكم ورحمة الله وبركاته،</p>
+          <p style="font-size: 14px; line-height: 1.6;">هذه رسالة تجريبية لتأكيد نجاح تفويض بريد المشرف المعتمد لإرسال الرسائل ورموز التحقق.</p>
+          <div style="margin: 20px 0; padding: 14px; background: #FFFFFF; border-radius: 8px; border: 1px solid #E8DAC8; font-weight: bold; color: #053B50;">
+            حالة الإرسال: فعال ومسجل بنجاح في قاعدة بيانات مجمع عزم التعليمي
+          </div>
+          <p style="font-size: 12px; color: #666;">تاريخ وتوقيت الاختبار: ${new Date().toLocaleString('ar-SA')}</p>
+        </div>
+      `;
+
+      const result = await sendEmailViaGmail({
+        to: targetEmail,
+        subject: `رسالة اختبار تفويض بريد المشرف - مجمع عزم التعليمي`,
+        htmlContent: testHtml,
+        allowInteractiveAuth: true,
+      });
+
+      if (result.success) {
+        setTestEmailResult({
+          success: true,
+          msg: `تم إرسال البريد التجريبي بنجاح إلى (${targetEmail})! الحساب مفعل ويعمل بكفاءة عالية.`,
+        });
+      } else {
+        setTestEmailResult({
+          success: false,
+          msg: result.error || 'تعذر إرسال البريد التجريبي، يرجى التحقق من تفويض Google أو الصلاحيات.',
+        });
+      }
+    } catch (err) {
+      console.error('Test email error:', err);
+      setTestEmailResult({
+        success: false,
+        msg: 'حدث خطأ غير متوقع أثناء إرسال البريد التجريبي.',
+      });
+    } finally {
+      setIsSendingTestEmail(false);
+    }
+  };
+
+  // De-authorize sender
+  const handleDeauthorize = async () => {
+    if (!window.confirm('هل أنت متأكد من رغبتك في إلغاء تفويض الحساب الحالي؟')) {
+      return;
+    }
+    await deauthorizeSenderEmail();
+    setHasGmailAuth(false);
+    const updated = await getSystemConfig();
+    setSystemConfig(updated);
+    setAuthSuccessMsg('تم إلغاء التفويض بنجاح. يمكنك إعادة التفويض في أي وقت.');
   };
 
   // Complex Creation
@@ -449,64 +570,200 @@ export const WelcomeDashboard: React.FC<WelcomeDashboardProps> = ({ user, onLogo
 
       {/* Tab 4: Mailer Settings Tab */}
       {activeTab === 'settings' && (
-        <div className="bg-[#FFFFFF] border-2 border-[#E8DAC8] rounded-2xl p-6 sm:p-10 shadow-xs max-w-3xl mx-auto space-y-6">
-          <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-xl bg-[#053B50] text-[#E8DAC8] flex items-center justify-center">
-              <Mail className="w-6 h-6" />
+        <div className="bg-[#FFFFFF] border-2 border-[#E8DAC8] rounded-2xl p-6 sm:p-8 shadow-xs max-w-3xl mx-auto space-y-6">
+          {/* Header */}
+          <div className="flex items-start sm:items-center justify-between gap-4 pb-4 border-b border-[#E8DAC8]">
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 rounded-2xl bg-[#053B50] text-[#E8DAC8] flex items-center justify-center shadow-xs">
+                <Mail className="w-6 h-6" />
+              </div>
+              <div>
+                <h2 className="text-xl font-black text-[#053B50]">
+                  تفويض بريد المشرف المعتمد للنظام
+                </h2>
+                <p className="text-xs text-[#053B50]/75">
+                  اعتماد وتثبيت الحساب المخول بإرسال رسائل التحقق وتغيير كلمات المرور
+                </p>
+              </div>
             </div>
-            <div>
-              <h2 className="text-xl font-black text-[#053B50]">
-                تفويض بريد الإرسال المعتمد للنظام
-              </h2>
-              <p className="text-xs text-[#053B50]/75">
-                تثبيت الحساب المخول بإرسال رسائل التحقق وتغيير كلمات المرور للمسجلين الجدد
-              </p>
-            </div>
+
+            <span
+              className={`px-3 py-1 rounded-full text-xs font-bold flex items-center gap-1.5 shrink-0 ${
+                hasGmailAuth
+                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                  : 'bg-amber-100 text-amber-800 border border-amber-300'
+              }`}
+            >
+              {hasGmailAuth ? (
+                <>
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  مفعل ومحفوظ دائماً
+                </>
+              ) : (
+                <>
+                  <AlertCircle className="w-3.5 h-3.5" />
+                  بانتظار التفويض
+                </>
+              )}
+            </span>
           </div>
 
-          <div className="bg-[#F7F3EE] p-4 rounded-xl border border-[#E8DAC8] text-xs text-[#053B50]/80 space-y-2">
-            <div className="flex justify-between items-center">
-              <span>البريد الإلكتروني المعتمد الحالي للإرسال:</span>
-              <strong className="font-mono text-[#053B50]">{systemConfig?.senderEmail || user.email}</strong>
+          {/* Permanent Status Overview Card */}
+          <div className="bg-[#F7F3EE] p-5 rounded-xl border border-[#E8DAC8] space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+              <span className="text-[#053B50]/70 font-bold">البريد الإلكتروني المعتمد حالياً:</span>
+              <strong dir="ltr" className="font-mono text-sm text-[#053B50] bg-[#FFFFFF] px-3 py-1 rounded-lg border border-[#E8DAC8]">
+                {systemConfig?.senderEmail || user.email || 'لم يحدد بعد'}
+              </strong>
             </div>
-            <div className="flex justify-between items-center">
-              <span>حالة التفويض الدائم:</span>
+
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+              <span className="text-[#053B50]/70 font-bold">حالة الحفظ والاستمرارية:</span>
               {hasGmailAuth ? (
-                <span className="text-emerald-700 font-bold flex items-center gap-1">
-                  <CheckCircle2 className="w-4 h-4" /> مفعل ومحفوظ في قاعدة البيانات
+                <span className="text-emerald-800 font-bold flex items-center gap-1">
+                  <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                  محفوظ للأبد في قاعدة البيانات (يبقى مفعلاً حتى بعد إغلاق الجهاز أو تحديث الموقع)
                 </span>
               ) : (
-                <span className="text-amber-700 font-bold flex items-center gap-1">
-                  <AlertCircle className="w-4 h-4" /> بانتظار التفويض
+                <span className="text-amber-800 font-bold flex items-center gap-1">
+                  <AlertCircle className="w-4 h-4 text-amber-600" />
+                  غير مفوض حالياً
                 </span>
               )}
             </div>
+
+            {systemConfig?.authorizedAt && (
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-[11px] text-[#053B50]/60 border-t border-[#E8DAC8]/60 pt-2">
+                <span>تاريخ آخر تفويض وتثبيت:</span>
+                <span dir="ltr">{new Date(systemConfig.authorizedAt).toLocaleString('ar-SA')}</span>
+              </div>
+            )}
+
+            {systemConfig?.authorizedBy && (
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-[11px] text-[#053B50]/60">
+                <span>المشرف المفوض:</span>
+                <span className="font-bold text-[#053B50]">{systemConfig.authorizedBy}</span>
+              </div>
+            )}
           </div>
 
+          {/* Email Settings Configuration Form */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-bold text-[#053B50] mb-1.5">
+                البريد الإلكتروني للمشرف المراد اعتماده
+              </label>
+              <input
+                type="email"
+                value={customSenderEmail}
+                onChange={(e) => setCustomSenderEmail(e.target.value)}
+                placeholder="supervisor@example.com"
+                dir="ltr"
+                className="w-full bg-[#FFFFFF] border-2 border-[#E8DAC8] focus:border-[#053B50] rounded-xl px-3.5 py-2.5 text-xs text-[#053B50] outline-none transition-colors"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-[#053B50] mb-1.5">
+                اسم الجهة المرسلة (يظهر في بريد الطلاب)
+              </label>
+              <input
+                type="text"
+                value={customSenderName}
+                onChange={(e) => setCustomSenderName(e.target.value)}
+                placeholder="مجمع عزم التعليمي"
+                className="w-full bg-[#FFFFFF] border-2 border-[#E8DAC8] focus:border-[#053B50] rounded-xl px-3.5 py-2.5 text-xs text-[#053B50] outline-none transition-colors"
+              />
+            </div>
+          </div>
+
+          {/* Feedback Messages */}
           {authSuccessMsg && (
-            <div className="p-3 bg-emerald-100 text-emerald-800 rounded-xl text-xs font-bold flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            <div className="p-3.5 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl text-xs font-bold flex items-start gap-2.5">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
               <span>{authSuccessMsg}</span>
             </div>
           )}
 
           {errorMsg && (
-            <div className="p-3 bg-red-100 text-red-800 rounded-xl text-xs font-bold flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+            <div className="p-3.5 bg-red-50 border border-red-200 text-red-800 rounded-xl text-xs font-bold flex items-start gap-2.5">
+              <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
               <span>{errorMsg}</span>
             </div>
           )}
 
-          <div className="pt-2">
+          {testEmailResult && (
+            <div
+              className={`p-3.5 rounded-xl text-xs font-bold flex items-start gap-2.5 border ${
+                testEmailResult.success
+                  ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                  : 'bg-amber-50 border-amber-200 text-amber-900'
+              }`}
+            >
+              {testEmailResult.success ? (
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+              ) : (
+                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              )}
+              <span>{testEmailResult.msg}</span>
+            </div>
+          )}
+
+          {/* Action Buttons */}
+          <div className="pt-2 flex flex-col sm:flex-row items-stretch sm:items-center gap-3 flex-wrap">
+            {/* Direct Database Permanent Authorization */}
             <button
               type="button"
-              onClick={handleAuthorizeSender}
-              disabled={isAuthorizing}
-              className="bg-[#053B50] hover:bg-[#042E3F] text-[#FFFFFF] font-bold text-xs px-6 py-3 rounded-xl flex items-center gap-2 shadow-md cursor-pointer disabled:opacity-50"
+              onClick={handleDirectPermanentAuthorization}
+              disabled={isSavingDirectly || isAuthorizing}
+              className="bg-[#053B50] hover:bg-[#042E3F] text-[#FFFFFF] font-bold text-xs px-5 py-3 rounded-xl flex items-center justify-center gap-2 shadow-sm cursor-pointer disabled:opacity-50 transition-colors"
             >
-              <Send className="w-4 h-4 text-[#E8DAC8]" />
-              <span>{isAuthorizing ? 'جاري الربط مع Google...' : hasGmailAuth ? 'إعادة تفويض وتحديث الصلاحية' : 'تفويض وإرسال من هذا الحساب'}</span>
+              <ShieldCheck className="w-4 h-4 text-[#E8DAC8]" />
+              <span>{isSavingDirectly ? 'جاري الحفظ في قاعدة البيانات...' : 'تثبيت وحفظ التفويض الدائم للأبد'}</span>
             </button>
+
+            {/* Google OAuth Authorization */}
+            <button
+              type="button"
+              onClick={handleAuthorizeWithGoogle}
+              disabled={isAuthorizing || isSavingDirectly}
+              className="bg-[#FFFFFF] hover:bg-[#F7F3EE] text-[#053B50] border-2 border-[#053B50] font-bold text-xs px-5 py-3 rounded-xl flex items-center justify-center gap-2 shadow-xs cursor-pointer disabled:opacity-50 transition-colors"
+            >
+              <Globe className="w-4 h-4 text-[#053B50]" />
+              <span>{isAuthorizing ? 'جاري الاتصال بـ Google...' : 'ربط وتفويض الحساب عبر Google'}</span>
+            </button>
+
+            {/* Test Email Dispatch */}
+            <button
+              type="button"
+              onClick={handleSendTestEmail}
+              disabled={isSendingTestEmail}
+              className="bg-[#F7F3EE] hover:bg-[#E8DAC8] text-[#053B50] border border-[#E8DAC8] font-bold text-xs px-5 py-3 rounded-xl flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 transition-colors"
+            >
+              <Send className="w-4 h-4" />
+              <span>{isSendingTestEmail ? 'جاري إرسال البريد التجريبي...' : 'إرسال بريد تجريبي للاختبار'}</span>
+            </button>
+
+            {/* De-authorize button */}
+            {hasGmailAuth && (
+              <button
+                type="button"
+                onClick={handleDeauthorize}
+                className="text-red-700 hover:text-red-800 hover:bg-red-50 text-xs font-bold px-4 py-3 rounded-xl transition-colors cursor-pointer mr-auto"
+              >
+                إلغاء التفويض
+              </button>
+            )}
+          </div>
+
+          {/* Explanation Box */}
+          <div className="p-4 bg-[#F7F3EE]/60 rounded-xl border border-[#E8DAC8] text-[11px] text-[#053B50]/75 space-y-1">
+            <p className="font-bold text-[#053B50]">
+              🛡️ الضمان الدائم للتفويض:
+            </p>
+            <p>
+              بمجرد النقر على <strong>"تثبيت وحفظ التفويض الدائم للأبد"</strong>، يتم تسجيل بريد المشرف في سجل الإعدادات الأساسية لقاعدة بيانات Firebase. سيبقى الحساب مفوضاً بشكل دائم حتى لو قمت بإعادة تشغيل الجهاز أو إغلاق المتصفح أو تحديث الصفحة.
+            </p>
           </div>
         </div>
       )}

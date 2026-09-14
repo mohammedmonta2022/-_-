@@ -140,9 +140,13 @@ export async function sendEmailViaGmail(options: {
     if (!response.ok) {
       const errData = await response.json().catch(() => ({}));
       const errDetail = errData?.error?.message || `كود الخطأ: ${response.status}`;
+      const isUnauthorized = response.status === 401;
       return {
         success: false,
-        error: `تعذر إرسال البريد عبر Gmail API (${errDetail})`,
+        needsAuth: isUnauthorized,
+        error: isUnauthorized
+          ? 'انتهت صلاحية رمز تفويض Google المؤقت للإرسال، يرجى الدخول كمدير/مشرف والضغط على "تحديث التفويض".'
+          : `تعذر إرسال البريد عبر Gmail API (${errDetail})`,
       };
     }
 
