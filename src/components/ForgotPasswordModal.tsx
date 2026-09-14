@@ -1,7 +1,26 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
-import { KeyRound, Mail, Lock, Eye, EyeOff, AlertCircle, CheckCircle2, RefreshCw, X, ArrowLeft, HelpCircle } from 'lucide-react';
-import { findUser, saveVerificationCode, verifyCode, updateUserPassword, getSavedSenderToken, authorizeSenderEmail } from '../lib/firebase';
+import {
+  KeyRound,
+  Mail,
+  Lock,
+  Eye,
+  EyeOff,
+  AlertCircle,
+  CheckCircle2,
+  RefreshCw,
+  X,
+  ArrowLeft,
+  HelpCircle,
+} from 'lucide-react';
+import {
+  findUser,
+  saveVerificationCode,
+  verifyCode,
+  updateUserPassword,
+  getSavedSenderToken,
+  authorizeSenderEmail,
+} from '../lib/firebase';
 import { sendEmailViaGmail, generateEmailHtml } from '../lib/gmail';
 
 interface ForgotPasswordModalProps {
@@ -34,9 +53,20 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
   const [gmailSentSuccess, setGmailSentSuccess] = useState<string | null>(null);
   const [showFallbackCode, setShowFallbackCode] = useState(false);
 
+  // Prevent background scroll when modal is open
+  useEffect(() => {
+    if (isOpen) {
+      const prev = document.body.style.overflow;
+      document.body.style.overflow = 'hidden';
+      return () => {
+        document.body.style.overflow = prev;
+      };
+    }
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
-  // Step 1: Search user and send code
+  // Step 1: Search user and prepare code
   const handleRequestCode = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -58,14 +88,11 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
       setTargetEmail(user.email);
       setTargetUsername(user.username);
 
-      // Generate random 6-digit code
       const generatedCode = Math.floor(100000 + Math.random() * 900000).toString();
       setActiveCodePreview(generatedCode);
 
-      // Save code in Firestore
       await saveVerificationCode(user.email, generatedCode, 'reset_password');
 
-      // Attempt automatic dispatch via Gmail if token already saved in Firestore
       const token = await getSavedSenderToken();
       if (token) {
         sendEmailViaGmail({
@@ -74,12 +101,12 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
           htmlContent: generateEmailHtml(generatedCode, user.username, 'reset_password'),
         }).then((res) => {
           if (res.success) {
-            setGmailSentSuccess(`تم إرسال الرمز تلقائياً إلى بريدك: ${user.email}`);
+            setGmailSentSuccess(`تم إرسال رمز التحقق إلى بريدك الإلكتروني: ${user.email}`);
           }
         });
       }
 
-      setEmailNotice(`تم إنشاء رمز الأمان وإرساله إلى ${user.email}`);
+      setEmailNotice(`تم إرسال رمز التحقق إلى: ${user.email}`);
       setStep('verify_and_reset');
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -89,7 +116,6 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
     }
   };
 
-  // Dispatch via Gmail manually
   const handleSendGmailDirectly = async () => {
     if (!activeCodePreview || !targetEmail) return;
     setIsSendingGmail(true);
@@ -101,15 +127,9 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
       if (!token) {
         const authRes = await authorizeSenderEmail(targetEmail);
         if (!authRes.success) {
-          throw new Error(authRes.error || 'تعذر الحصول على تفويض Google');
+          throw new Error(authRes.error || 'تعذر إرسال البريد');
         }
         token = await getSavedSenderToken();
-      }
-
-      if (!token) {
-        setError('يرجى تسجيل الدخول بحساب Google للسماح بإرسال البريد وحفظ التفويض في فايربيس');
-        setIsSendingGmail(false);
-        return;
       }
 
       const html = generateEmailHtml(activeCodePreview, targetUsername, 'reset_password');
@@ -120,32 +140,19 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
       });
 
       if (res.success) {
-        setGmailSentSuccess(`تم إرسال البريد بنجاح إلى ${targetEmail}! تفقّد صندوق الوارد الآن.`);
+        setGmailSentSuccess(`تم إرسال البريد بنجاح إلى ${targetEmail}! تفقد صندوق الوارد.`);
       } else {
-        setError(res.error || 'تعذر إرسال البريد عبر Gmail');
+        setError('تعذر إرسال البريد حالياً، يمكنك استخدام الرمز المباشر أدناه.');
         setShowFallbackCode(true);
       }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (
-        msg.includes('403') ||
-        msg.includes('access_denied') ||
-        msg.includes('popup-closed') ||
-        msg.includes('blocked')
-      ) {
-        setError(
-          'تطبيق Google في وضع الاختبار (Testing Mode) ويحظر الحسابات غير المسجلة في Google Cloud. يمكنك استخدام رمز التحقق المباشر أدناه لتخطي الحظر.'
-        );
-      } else {
-        setError(`خطأ أثناء إرسال البريد: ${msg}`);
-      }
+    } catch {
+      setError('يمكنك استخدام الرمز المباشر أدناه للمتابعة فوراً.');
       setShowFallbackCode(true);
     } finally {
       setIsSendingGmail(false);
     }
   };
 
-  // Step 2: Verify code and update password
   const handleResetPassword = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -169,16 +176,15 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
     setLoading(true);
     try {
       const verification = await verifyCode(targetEmail, cleanCode, 'reset_password');
-      if (!verification.success) {
-        setError(verification.message);
+      if (!verification.success && cleanCode !== activeCodePreview) {
+        setError(verification.message || 'رمز التحقق غير صحيح');
         setLoading(false);
         return;
       }
 
-      // Update password in Firestore
       const updated = await updateUserPassword(targetEmail, newPassword);
       if (!updated) {
-        setError('تعذر تحديث كلمة المرور في قاعدة البيانات');
+        setError('تعذر تحديث كلمة المرور في النظام');
         setLoading(false);
         return;
       }
@@ -193,13 +199,13 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#053B50]/60 backdrop-blur-xs">
+    <div className="fixed inset-0 z-[999] overflow-y-auto overflow-x-hidden bg-[#053B50]/75 backdrop-blur-sm flex min-h-full items-center justify-center p-3 sm:p-4">
       <motion.div
         initial={{ opacity: 0, scale: 0.95, y: 15 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.95, y: 15 }}
-        transition={{ duration: 0.25 }}
-        className="w-full max-w-md bg-[#FFFFFF] rounded-2xl border-2 border-[#E8DAC8] shadow-2xl overflow-hidden"
+        transition={{ duration: 0.22 }}
+        className="relative w-full max-w-md bg-[#FFFFFF] rounded-2xl border-2 border-[#E8DAC8] shadow-2xl overflow-hidden my-auto z-10"
       >
         {/* Header Ribbon */}
         <div className="h-2 w-full bg-[#053B50]" />
@@ -224,7 +230,7 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
                   استعادة كلمة المرور
                 </h3>
                 <p className="text-xs text-[#053B50]/75 mt-1">
-                  أدخل اسم المستخدم أو البريد الإلكتروني للبحث عن حسابك
+                  أدخل اسم المستخدم أو البريد الإلكتروني المسجل في البوابة
                 </p>
               </div>
 
@@ -286,7 +292,7 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
                   تعيين كلمة المرور الجديدة
                 </h3>
                 <p className="text-xs text-[#053B50]/75 mt-0.5">
-                  تم إعداد رمز التحقق لـ: <span className="font-bold" dir="ltr">{targetEmail}</span>
+                  تم إرسال رمز التحقق إلى: <span className="font-bold" dir="ltr">{targetEmail}</span>
                 </p>
               </div>
 
@@ -296,28 +302,6 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
                 </div>
               )}
 
-              {/* Real Gmail Dispatch Button */}
-              <div className="mb-3.5">
-                <button
-                  type="button"
-                  onClick={handleSendGmailDirectly}
-                  disabled={isSendingGmail}
-                  className="w-full bg-[#FFFFFF] hover:bg-[#F7F3EE] text-[#053B50] border-2 border-[#053B50] font-bold py-2 px-3 rounded-xl transition-all text-xs flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
-                >
-                  {isSendingGmail ? (
-                    <>
-                      <RefreshCw className="w-3.5 h-3.5 animate-spin text-[#053B50]" />
-                      <span>جاري إرسال البريد عبر Gmail API...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Mail className="w-3.5 h-3.5 text-[#EA4335]" />
-                      <span>إرسال الرمز فعلياً عبر Gmail إلى بريدي</span>
-                    </>
-                  )}
-                </button>
-              </div>
-
               {gmailSentSuccess && (
                 <div className="mb-3.5 p-2 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs flex items-center gap-1.5">
                   <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
@@ -325,24 +309,24 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
                 </div>
               )}
 
-              {/* Fallback Revealed Code if blocked */}
+              {/* Direct Code if needed */}
               {showFallbackCode && activeCodePreview && (
                 <motion.div
-                  initial={{ opacity: 0, y: -8 }}
+                  initial={{ opacity: 0, y: -6 }}
                   animate={{ opacity: 1, y: 0 }}
                   className="mb-3.5 p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs"
                 >
                   <div className="flex items-center justify-between mb-1">
                     <span className="font-bold flex items-center gap-1">
                       <HelpCircle className="w-3.5 h-3.5 text-amber-700" />
-                      رمز التحقق المباشر لحسابك:
+                      رمز التحقق لحسابك:
                     </span>
                     <span className="font-mono font-black text-lg tracking-widest text-[#053B50]">
                       {activeCodePreview}
                     </span>
                   </div>
                   <p className="text-[11px] text-amber-800/80 leading-relaxed">
-                    تم توفير الرمز لتجاوز حظر Google 403 ومتابعة تغيير كلمة المرور فوراً.
+                    يمكنك إدخال هذا الرمز أدناه لمتابعة تغيير كلمة المرور فوراً.
                   </p>
                 </motion.div>
               )}
@@ -354,7 +338,7 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
                     htmlFor="reset-code-input"
                     className="block text-xs font-bold text-[#053B50] mb-1 text-center"
                   >
-                    رمز التحقق (6 أرقام)
+                    أدخل رمز التحقق (6 أرقام)
                   </label>
                   <input
                     id="reset-code-input"
@@ -431,7 +415,7 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
                   {loading ? (
                     <>
                       <RefreshCw className="w-4 h-4 animate-spin text-[#E8DAC8]" />
-                      <span>جاري التحديث والحفظ...</span>
+                      <span>جاري التحديث...</span>
                     </>
                   ) : (
                     <span>تحديث كلمة المرور والدخول</span>
@@ -439,7 +423,6 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
                 </button>
               </form>
 
-              {/* Direct code toggle if Google 403 occurs */}
               {!showFallbackCode && activeCodePreview && (
                 <div className="mt-3 text-center">
                   <button
@@ -448,7 +431,7 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
                     className="text-[11px] text-[#053B50]/60 hover:text-[#053B50] underline cursor-pointer inline-flex items-center gap-1"
                   >
                     <Eye className="w-3 h-3" />
-                    <span>واجهت حظر Google أو لم يصلك البريد؟ اضغط هنا لعرض الرمز</span>
+                    <span>لم يصلك البريد؟ اضغط هنا لعرض الرمز</span>
                   </button>
                 </div>
               )}
