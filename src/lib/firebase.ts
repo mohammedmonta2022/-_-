@@ -4,10 +4,12 @@ import {
   collection,
   doc,
   setDoc,
+  getDoc,
   getDocs,
   query,
   where,
   deleteDoc,
+  getDocFromServer,
 } from 'firebase/firestore';
 import {
   getAuth,
@@ -16,7 +18,7 @@ import {
   onAuthStateChanged,
   type User,
 } from 'firebase/auth';
-import type { UserAccount, VerificationCodeRecord } from '../types';
+import type { UserAccount, VerificationCodeRecord, SystemConfig } from '../types';
 import firebaseConfig from '../../firebase-applet-config.json';
 
 // Initialize Firebase App safely
@@ -27,6 +29,21 @@ export const auth = getAuth(app);
 // Google Provider with Gmail Send scope
 const provider = new GoogleAuthProvider();
 provider.addScope('https://www.googleapis.com/auth/gmail.send');
+// Hint offline access / prompt select account
+provider.setCustomParameters({
+  prompt: 'select_account',
+});
+
+// Test connection on boot per Firebase guidelines
+(async function testConnection() {
+  try {
+    await getDocFromServer(doc(db, 'system_config', 'mailer_settings'));
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('the client is offline')) {
+      console.warn('Firebase client is running in offline mode:', error.message);
+    }
+  }
+})();
 
 // In-memory token cache (never stored in localStorage per security guidelines)
 let cachedAccessToken: string | null = null;
@@ -84,6 +101,13 @@ export const getAccessToken = (): string | null => {
 };
 
 /**
+ * Manually set access token in memory
+ */
+export const setAccessToken = (token: string | null): void => {
+  cachedAccessToken = token;
+};
+
+/**
  * Logout from Firebase Auth
  */
 export const logoutAuth = async () => {
@@ -94,10 +118,13 @@ export const logoutAuth = async () => {
 // Collections
 const USERS_COLLECTION = 'users';
 const VERIFICATION_COLLECTION = 'verification_codes';
+const SYSTEM_CONFIG_COLLECTION = 'system_config';
+const MAILER_DOC_ID = 'mailer_settings';
 
-// Local storage cache keys for instant responsiveness and resilience
+// Local storage cache keys for instant responsiveness and offline capability
 const LOCAL_USERS_KEY = 'azm_users_store_v1';
 const LOCAL_CODES_KEY = 'azm_codes_store_v1';
+const LOCAL_SYSTEM_CONFIG_KEY = 'azm_system_config_v1';
 
 function getLocalUsers(): UserAccount[] {
   try {
@@ -133,6 +160,23 @@ function saveLocalCodes(codes: VerificationCodeRecord[]): void {
   }
 }
 
+function getLocalSystemConfig(): SystemConfig | null {
+  try {
+    const raw = localStorage.getItem(LOCAL_SYSTEM_CONFIG_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveLocalSystemConfig(config: SystemConfig): void {
+  try {
+    localStorage.setItem(LOCAL_SYSTEM_CONFIG_KEY, JSON.stringify(config));
+  } catch {
+    // Ignore quota errors
+  }
+}
+
 /**
  * Executes a promise with an automatic timeout to prevent the UI from freezing
  */
@@ -152,19 +196,97 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Pro
 }
 
 /**
- * Save user to Firestore and Local Cache
+ * Retrieve System Configuration (Official Mailer Email)
+ */
+export async function getSystemConfig(): Promise<SystemConfig | null> {
+  try {
+    const ref = doc(db, SYSTEM_CONFIG_COLLECTION, MAILER_DOC_ID);
+    const snap = await withTimeout(getDoc(ref), 2500, null);
+    if (snap && snap.exists()) {
+      const data = snap.data() as SystemConfig;
+      saveLocalSystemConfig(data);
+      return data;
+    }
+  } catch (err) {
+    console.warn('Could not fetch system config from Firestore:', err);
+  }
+
+  // Fallback to local
+  return getLocalSystemConfig();
+}
+
+/**
+ * Save or Update System Configuration
+ */
+export async function saveSystemConfig(config: Partial<SystemConfig>): Promise<void> {
+  const current = (await getSystemConfig()) || {
+    senderEmail: '',
+    senderName: 'مجمع عزم التعليمي',
+    isConfigured: false,
+    firstUserRegistered: false,
+  };
+
+  const updated: SystemConfig = {
+    senderEmail: config.senderEmail ?? current.senderEmail,
+    senderName: config.senderName ?? current.senderName,
+    isConfigured: config.isConfigured ?? current.isConfigured,
+    firstUserRegistered: config.firstUserRegistered ?? current.firstUserRegistered,
+    configuredAt: new Date().toISOString(),
+  };
+
+  saveLocalSystemConfig(updated);
+
+  try {
+    const ref = doc(db, SYSTEM_CONFIG_COLLECTION, MAILER_DOC_ID);
+    await withTimeout(setDoc(ref, updated, { merge: true }), 3000, null);
+  } catch (err) {
+    console.warn('Could not save system config to Firestore:', err);
+  }
+}
+
+/**
+ * Check if the current system has an official sender email
+ */
+export async function getOfficialSenderEmail(): Promise<string | null> {
+  const config = await getSystemConfig();
+  if (config && config.senderEmail && config.isConfigured) {
+    return config.senderEmail;
+  }
+  return null;
+}
+
+/**
+ * Save user to Firestore and Local Cache.
+ * If this is the first user registering in the system, automatically assign them
+ * as the Administrator and the Official Mailer Email!
  */
 export async function createUserAccount(user: Omit<UserAccount, 'id'>): Promise<string> {
   const cleanEmail = user.email.toLowerCase().trim();
   const cleanUsername = user.username.trim();
   const id = `user_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
+  // Check if system already has registered users or a sender email
+  const existingConfig = await getSystemConfig();
+  const isFirstUser = !existingConfig || !existingConfig.firstUserRegistered || !existingConfig.senderEmail;
+
   const newUserData: UserAccount = {
     ...user,
     id,
     email: cleanEmail,
     username: cleanUsername,
+    role: user.role || (isFirstUser ? 'admin' : 'user'),
+    isOfficialSender: user.isOfficialSender !== undefined ? user.isOfficialSender : isFirstUser,
   };
+
+  // If this is the first user, record them in system_config as the official mailer!
+  if (isFirstUser) {
+    await saveSystemConfig({
+      senderEmail: cleanEmail,
+      senderName: 'مجمع عزم التعليمي',
+      isConfigured: true,
+      firstUserRegistered: true,
+    });
+  }
 
   // 1. Immediately cache locally
   const currentUsers = getLocalUsers();
@@ -177,7 +299,7 @@ export async function createUserAccount(user: Omit<UserAccount, 'id'>): Promise<
   // 2. Persist to Firestore with timeout
   try {
     const userRef = doc(collection(db, USERS_COLLECTION), id);
-    await withTimeout(setDoc(userRef, newUserData), 3000, null);
+    await withTimeout(setDoc(userRef, newUserData), 3500, null);
   } catch (err) {
     console.info('Cloud sync deferred, saved locally');
   }

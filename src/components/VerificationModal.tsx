@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
-import { ShieldCheck, Mail, ArrowRight, RefreshCw, AlertCircle, CheckCircle2, HelpCircle, Eye } from 'lucide-react';
-import { googleSignIn, getAccessToken } from '../lib/firebase';
+import { ShieldCheck, Mail, ArrowRight, RefreshCw, AlertCircle, CheckCircle2, HelpCircle, Eye, Sparkles, Send } from 'lucide-react';
+import { googleSignIn, getAccessToken, getSystemConfig } from '../lib/firebase';
 import { sendEmailViaGmail, generateEmailHtml } from '../lib/gmail';
 
 interface VerificationModalProps {
@@ -37,6 +37,19 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
     emailSentStatus || `تم إعداد رمز التحقق لبريدك: ${email}`
   );
   const [showFallbackCode, setShowFallbackCode] = useState(false);
+  const [officialSenderEmail, setOfficialSenderEmail] = useState<string | null>(null);
+  const [isFirstRegistration, setIsFirstRegistration] = useState<boolean>(false);
+
+  // Load official sender configuration from Firestore
+  useEffect(() => {
+    getSystemConfig().then((cfg) => {
+      if (cfg && cfg.senderEmail && cfg.isConfigured) {
+        setOfficialSenderEmail(cfg.senderEmail);
+      } else {
+        setIsFirstRegistration(true);
+      }
+    });
+  }, []);
 
   // Check Google Auth token and auto-send if already authorized
   useEffect(() => {
@@ -176,44 +189,72 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
             </p>
           </div>
 
-          {/* Email Destination Box */}
-          <div className="bg-[#F7F3EE] border border-[#E8DAC8] rounded-xl p-3 mb-4 flex items-center gap-2.5 text-xs text-[#053B50]">
-            <Mail className="w-4 h-4 text-[#053B50] shrink-0" />
-            <div className="flex-1 overflow-hidden">
-              <span className="block text-[11px] text-[#053B50]/70 font-semibold">
-                البريد المستلم:
+          {/* First User Special Badge */}
+          {isFirstRegistration && (
+            <div className="mb-4 p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-amber-600 shrink-0" />
+              <span>
+                <strong>أنت أول مسجل في النظام!</strong> سيتم حفظ بريدك كبريد الإرسال الرسمي المعتمد لمجمع عزم.
               </span>
-              <span dir="ltr" className="block font-bold truncate">
-                {email}
-              </span>
+            </div>
+          )}
+
+          {/* Email Routing Info Box */}
+          <div className="bg-[#F7F3EE] border border-[#E8DAC8] rounded-xl p-3 mb-4 space-y-2 text-xs text-[#053B50]">
+            {officialSenderEmail && (
+              <div className="flex items-center gap-2 border-b border-[#E8DAC8]/70 pb-2">
+                <Send className="w-3.5 h-3.5 text-[#053B50]/70 shrink-0" />
+                <div className="flex-1 overflow-hidden">
+                  <span className="block text-[10px] text-[#053B50]/70 font-semibold">
+                    بريد الإرسال المعتمد للنظام:
+                  </span>
+                  <span dir="ltr" className="block font-bold truncate text-[#053B50]">
+                    {officialSenderEmail}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            <div className="flex items-center gap-2">
+              <Mail className="w-3.5 h-3.5 text-[#053B50] shrink-0" />
+              <div className="flex-1 overflow-hidden">
+                <span className="block text-[10px] text-[#053B50]/70 font-semibold">
+                  البريد المستلم:
+                </span>
+                <span dir="ltr" className="block font-bold truncate text-[#053B50]">
+                  {email}
+                </span>
+              </div>
             </div>
           </div>
 
-          {/* Gmail API Send Button */}
-          <div className="mb-4">
-            <button
-              type="button"
-              onClick={handleSendViaGmailDirectly}
-              disabled={isSendingToGmail}
-              className="w-full bg-[#FFFFFF] hover:bg-[#F7F3EE] text-[#053B50] border-2 border-[#053B50] font-bold py-2.5 px-3 rounded-xl transition-all text-xs flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
-            >
-              {isSendingToGmail ? (
-                <>
-                  <RefreshCw className="w-3.5 h-3.5 animate-spin text-[#053B50]" />
-                  <span>جاري إرسال البريد عبر Gmail API...</span>
-                </>
-              ) : (
-                <>
-                  <Mail className="w-3.5 h-3.5 text-[#EA4335]" />
-                  <span>
-                    {hasGoogleAuth
-                      ? `إرسال رسالة بريد إلكتروني عبر Gmail إلى ${email}`
-                      : 'تأكيد إرسال الرسالة إلى بريدي عبر Gmail'}
-                  </span>
-                </>
-              )}
-            </button>
-          </div>
+          {/* Gmail API Send Button (Visible if user wants to authorize, or if first user) */}
+          {(isFirstRegistration || hasGoogleAuth) && (
+            <div className="mb-4">
+              <button
+                type="button"
+                onClick={handleSendViaGmailDirectly}
+                disabled={isSendingToGmail}
+                className="w-full bg-[#FFFFFF] hover:bg-[#F7F3EE] text-[#053B50] border-2 border-[#053B50] font-bold py-2.5 px-3 rounded-xl transition-all text-xs flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+              >
+                {isSendingToGmail ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin text-[#053B50]" />
+                    <span>جاري إرسال البريد عبر Gmail API...</span>
+                  </>
+                ) : (
+                  <>
+                    <Mail className="w-3.5 h-3.5 text-[#EA4335]" />
+                    <span>
+                      {hasGoogleAuth
+                        ? `إرسال رسالة بريد إلكتروني عبر Gmail إلى ${email}`
+                        : 'تفويض بريد Google للإرسال الرسمي'}
+                    </span>
+                  </>
+                )}
+              </button>
+            </div>
+          )}
 
           {/* Success Message Alert */}
           {sendSuccessMsg && (
@@ -240,7 +281,7 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
                 </span>
               </div>
               <p className="text-[11px] text-amber-800/80 leading-relaxed">
-                تم توفير الرمز لتجاوز قيود حسابات الاختبار في Google OAuth دون تعطيل التسجيل.
+                تم توفير الرمز لتجاوز قيود حسابات الاختبار في Google OAuth ومتابعة التسجيل فوراً.
               </p>
             </motion.div>
           )}
@@ -282,7 +323,7 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
               {isLoading ? (
                 <>
                   <RefreshCw className="w-4 h-4 animate-spin text-[#E8DAC8]" />
-                  <span>جاري التحقق وحفظ البيانات...</span>
+                  <span>جاري التحقق وحفظ البيانات في Firebase...</span>
                 </>
               ) : (
                 <span>تأكيد والتحقق من الرمز</span>

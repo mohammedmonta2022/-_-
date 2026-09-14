@@ -18,6 +18,14 @@
           "type": "string",
           "description": "كلمة المرور المشفرة"
         },
+        "role": {
+          "type": "string",
+          "description": "دور المستخدم (مدير النظام أو طالب)"
+        },
+        "isOfficialSender": {
+          "type": "boolean",
+          "description": "هل هذا الحساب هو بريد الإرسال المعتمد للنظام"
+        },
         "createdAt": {
           "type": "string",
           "description": "تاريخ إنشاء الحساب"
@@ -58,6 +66,34 @@
         }
       },
       "required": ["email", "code", "purpose", "createdAt"]
+    },
+    "SystemConfig": {
+      "title": "SystemConfig",
+      "description": "إعدادات النظام وبريد الإرسال المعتمد لمجمع عزم التعليمي",
+      "type": "object",
+      "properties": {
+        "senderEmail": {
+          "type": "string",
+          "format": "email",
+          "description": "البريد الإلكتروني المعتمد لإرسال الإيميلات"
+        },
+        "senderName": {
+          "type": "string",
+          "description": "اسم جهة الإرسال (مثال: مجمع عزم التعليمي)"
+        },
+        "isConfigured": {
+          "type": "boolean",
+          "description": "هل تم اعتماد وتثبيت بريد الإرسال"
+        },
+        "firstUserRegistered": {
+          "type": "boolean",
+          "description": "هل تم تسجيل أول مستخدم في النظام"
+        },
+        "configuredAt": {
+          "type": "string",
+          "description": "وقت وتاريخ اعتماد البريد"
+        }
+      }
     }
   },
   "firestore": {
@@ -68,6 +104,10 @@
     "/verification_codes/{codeId}": {
       "schema": "VerificationCode",
       "description": "سجلات رموز التحقق المرسلة للمستخدمين"
+    },
+    "/system_config/{configId}": {
+      "schema": "SystemConfig",
+      "description": "إعدادات النظام وبريد الإرسال الرسمي"
     }
   }
 }

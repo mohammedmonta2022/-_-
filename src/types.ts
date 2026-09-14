@@ -5,6 +5,8 @@ export interface UserAccount {
   password: string;
   createdAt: string;
   isVerified: boolean;
+  role?: 'admin' | 'user';
+  isOfficialSender?: boolean;
 }
 
 export interface VerificationCodeRecord {
@@ -14,6 +16,14 @@ export interface VerificationCodeRecord {
   purpose: 'register' | 'reset_password';
   createdAt: string;
   expiresAt: string;
+}
+
+export interface SystemConfig {
+  senderEmail: string;
+  senderName: string;
+  isConfigured: boolean;
+  firstUserRegistered: boolean;
+  configuredAt?: string;
 }
 
 export type AuthTab = 'login' | 'register';

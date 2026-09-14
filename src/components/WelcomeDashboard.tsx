@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
-import { CheckCircle2, LogOut, User, Mail, Calendar, Sparkles, BookOpen, Award, FileText } from 'lucide-react';
+import { CheckCircle2, LogOut, User, Mail, Calendar, Sparkles, BookOpen, Award, FileText, Shield, Send, RefreshCw } from 'lucide-react';
 import type { UserAccount } from '../types';
+import { googleSignIn, getAccessToken, saveSystemConfig, getSystemConfig } from '../lib/firebase';
 
 interface WelcomeDashboardProps {
   user: UserAccount;
@@ -9,6 +10,36 @@ interface WelcomeDashboardProps {
 }
 
 export const WelcomeDashboard: React.FC<WelcomeDashboardProps> = ({ user, onLogout }) => {
+  const [hasGmailAuth, setHasGmailAuth] = useState(false);
+  const [isAuthorizing, setIsAuthorizing] = useState(false);
+  const [authSuccessMsg, setAuthSuccessMsg] = useState<string | null>(null);
+  const isSenderAdmin = Boolean(user.isOfficialSender || user.role === 'admin');
+
+  useEffect(() => {
+    setHasGmailAuth(Boolean(getAccessToken()));
+  }, []);
+
+  const handleAuthorizeSender = async () => {
+    setIsAuthorizing(true);
+    setAuthSuccessMsg(null);
+    try {
+      const res = await googleSignIn();
+      if (res?.accessToken) {
+        setHasGmailAuth(true);
+        await saveSystemConfig({
+          senderEmail: user.email,
+          senderName: 'مجمع عزم التعليمي',
+          isConfigured: true,
+        });
+        setAuthSuccessMsg('تم ربط وتفويض بريدك بنجاح لإرسال الإيميلات والرموز لجميع مستخدمي مجمع عزم!');
+      }
+    } catch (err) {
+      console.warn('Google auth error:', err);
+    } finally {
+      setIsAuthorizing(false);
+    }
+  };
+
   return (
     <motion.div
       key="welcome-dashboard"
@@ -38,16 +69,25 @@ export const WelcomeDashboard: React.FC<WelcomeDashboardProps> = ({ user, onLogo
             مرحباً بك يا {user.username}!
           </h2>
           <p className="text-sm sm:text-base text-[#053B50]/75 font-medium max-w-md mx-auto">
-            أهلاً وسهلاً بك في البوابة الإلكترونية لمجمع عزم التعليمي. حسابك نشط ومحفوظ بأمان في قاعدة البيانات السحابية.
+            أهلاً وسهلاً بك في البوابة الإلكترونية لمجمع عزم التعليمي. حسابك نشط ومحفوظ بأمان في قاعدة بيانات Firebase Firestore.
           </p>
         </div>
 
         {/* User Profile Card */}
-        <div className="bg-[#F7F3EE] border border-[#E8DAC8] rounded-2xl p-5 sm:p-6 mb-8">
-          <h3 className="text-sm font-bold text-[#053B50] mb-4 flex items-center gap-2">
-            <User className="w-4 h-4 text-[#053B50]" />
-            <span>معلومات الحساب المسجل</span>
-          </h3>
+        <div className="bg-[#F7F3EE] border border-[#E8DAC8] rounded-2xl p-5 sm:p-6 mb-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-sm font-bold text-[#053B50] flex items-center gap-2">
+              <User className="w-4 h-4 text-[#053B50]" />
+              <span>معلومات الحساب المسجل</span>
+            </h3>
+
+            {isSenderAdmin && (
+              <span className="bg-[#053B50] text-[#FFFFFF] text-[11px] font-bold px-3 py-1 rounded-full flex items-center gap-1">
+                <Shield className="w-3 h-3 text-[#E8DAC8]" />
+                <span>بريد الإرسال الرسمي المعتمد للنظام</span>
+              </span>
+            )}
+          </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs sm:text-sm">
             <div className="bg-[#FFFFFF] p-3 rounded-xl border border-[#E8DAC8]">
@@ -73,11 +113,55 @@ export const WelcomeDashboard: React.FC<WelcomeDashboardProps> = ({ user, onLogo
             <div className="bg-[#FFFFFF] p-3 rounded-xl border border-[#E8DAC8]">
               <span className="text-[#053B50]/70 block text-xs font-semibold mb-1">حفظ البيانات:</span>
               <span className="font-bold text-[#053B50]">
-                سحابياً في النظام الموحد لمجمع عزم
+                سحابياً في Firebase Firestore
               </span>
             </div>
           </div>
         </div>
+
+        {/* Sender Admin Control Box */}
+        {isSenderAdmin && (
+          <div className="mb-6 p-4 rounded-2xl bg-amber-50/70 border border-amber-200 text-xs text-[#053B50]">
+            <div className="flex items-center gap-2 mb-2">
+              <Send className="w-4 h-4 text-[#053B50]" />
+              <h4 className="font-bold text-sm text-[#053B50]">إعدادات بريد الإرسال للمجمع</h4>
+            </div>
+            <p className="text-[#053B50]/80 leading-relaxed mb-3">
+              تم تسجيل هذا الحساب كبريد الإرسال المعتمد لمجمع عزم. سيتم إرسال إشعارات ورموز الأمان للمستخدمين الجدد من هذا الحساب.
+            </p>
+
+            {authSuccessMsg && (
+              <div className="mb-3 p-2.5 rounded-lg bg-emerald-100 text-emerald-800 font-semibold flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>{authSuccessMsg}</span>
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={handleAuthorizeSender}
+              disabled={isAuthorizing}
+              className="bg-[#053B50] hover:bg-[#042E3F] text-[#FFFFFF] font-bold py-2 px-4 rounded-xl transition-all flex items-center gap-2 cursor-pointer shadow-sm text-xs disabled:opacity-50"
+            >
+              {isAuthorizing ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  <span>جاري التفويض مع Google...</span>
+                </>
+              ) : hasGmailAuth ? (
+                <>
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>بريد Google مفوض ونشط لإرسال الإيميلات</span>
+                </>
+              ) : (
+                <>
+                  <Mail className="w-3.5 h-3.5 text-[#E8DAC8]" />
+                  <span>تأكيد تفويض Google لإرسال الإيميلات للجميع</span>
+                </>
+              )}
+            </button>
+          </div>
+        )}
 
         {/* Quick Portal Services */}
         <div className="mb-8">
