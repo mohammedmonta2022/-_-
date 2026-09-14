@@ -8,8 +8,6 @@ import {
   RefreshCw,
   ArrowRight,
 } from 'lucide-react';
-import { getSavedSenderToken } from '../lib/firebase';
-import { sendEmailViaGmail, generateEmailHtml } from '../lib/gmail';
 
 interface VerificationModalProps {
   email: string;
@@ -25,13 +23,11 @@ interface VerificationModalProps {
 
 export const VerificationModal: React.FC<VerificationModalProps> = ({
   email,
-  username,
-  expectedCode,
-  purpose,
   onVerify,
   onResend,
   onBack,
   isLoading,
+  purpose,
 }) => {
   const [code, setCode] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -49,29 +45,6 @@ export const VerificationModal: React.FC<VerificationModalProps> = ({
       document.body.style.overflow = originalStyle;
     };
   }, []);
-
-  // Automatic send using the sender account stored in database
-  useEffect(() => {
-    async function triggerAuthorizedSend() {
-      try {
-        const token = await getSavedSenderToken();
-        if (token && expectedCode) {
-          sendEmailViaGmail({
-            to: email,
-            subject: `رمز التحقق لمجمع عزم التعليمي (${expectedCode})`,
-            htmlContent: generateEmailHtml(expectedCode, username, purpose),
-          }).then((res) => {
-            if (res.success) {
-              setSendSuccessMsg(`تم إرسال رمز التحقق بنجاح إلى بريدك الإلكتروني (${email})`);
-            }
-          });
-        }
-      } catch (err) {
-        console.error('Error dispatching verification email:', err);
-      }
-    }
-    triggerAuthorizedSend();
-  }, [email, expectedCode, username, purpose]);
 
   useEffect(() => {
     if (resendTimer > 0) {
