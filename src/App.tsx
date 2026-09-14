@@ -3,14 +3,15 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
-import { GraduationCap, LogIn, UserPlus } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { GraduationCap, LogIn, UserPlus, Lock } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { AnimatedBackground } from './components/AnimatedBackground';
 import { LoginForm } from './components/LoginForm';
 import { RegisterForm } from './components/RegisterForm';
 import { ForgotPasswordModal } from './components/ForgotPasswordModal';
 import { WelcomeDashboard } from './components/WelcomeDashboard';
+import { getSystemConfig } from './lib/firebase';
 import type { UserAccount, AuthTab } from './types';
 
 export default function App() {
@@ -18,6 +19,21 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<UserAccount | null>(null);
   const [showForgotModal, setShowForgotModal] = useState(false);
   const [registrationNotice, setRegistrationNotice] = useState<string | null>(null);
+  const [allowPublicRegistration, setAllowPublicRegistration] = useState(true);
+
+  useEffect(() => {
+    async function checkPublicRegistration() {
+      try {
+        const config = await getSystemConfig();
+        if (config && config.allowPublicRegistration !== undefined) {
+          setAllowPublicRegistration(config.allowPublicRegistration);
+        }
+      } catch (err) {
+        console.error('Error checking registration status:', err);
+      }
+    }
+    checkPublicRegistration();
+  }, [currentUser]);
 
   const handleRegisterSuccess = (username: string) => {
     setRegistrationNotice(`تم إنشاء حسابك بنجاح يا ${username}! يمكنك الآن تسجيل الدخول.`);
@@ -35,7 +51,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen flex flex-col justify-between bg-[#FFFFFF] text-[#053B50] selection:bg-[#E8DAC8] selection:text-[#053B50] relative overflow-x-hidden">
-      {/* Living Vibrant Animated Background (Hardware Accelerated 60+ FPS) */}
+      {/* Living Vibrant Animated Background */}
       <AnimatedBackground />
 
       {/* Top Header Navigation */}
@@ -50,14 +66,14 @@ export default function App() {
               مجمع عزم التعليمي
             </h1>
             <span className="text-xs sm:text-sm font-semibold text-[#053B50]/70 tracking-wide mt-0.5">
-              بوابة الدخول وإنشاء الحسابات الموحدة
+              نظام إدارة المجمعات والحلقات القرآنية الموحد
             </span>
           </div>
 
           {/* Educational Motto Badge */}
           <div className="hidden sm:flex items-center gap-2 bg-[#F7F3EE] border border-[#E8DAC8] px-4 py-1.5 rounded-full text-xs font-semibold text-[#053B50] shadow-xs">
             <GraduationCap className="w-4 h-4 text-[#053B50]" />
-            <span>نحو بيئة تعليمية رائدة ومستدامة</span>
+            <span>نحو بيئة تعليمية قرآنية رائدة ومستدامة</span>
           </div>
         </div>
 
@@ -69,7 +85,7 @@ export default function App() {
       <main className="flex-1 flex items-center justify-center p-4 sm:p-6 lg:p-8 z-10 my-4 sm:my-8">
         <AnimatePresence mode="wait">
           {currentUser ? (
-            /* --- WELCOME DASHBOARD (مرحباً بك يا [اسم المستخدم]) --- */
+            /* --- SUPERVISOR / USER DASHBOARD SYSTEM --- */
             <WelcomeDashboard
               key="welcome-screen"
               user={currentUser}
@@ -123,8 +139,10 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => {
-                      setCurrentTab('register');
-                      setRegistrationNotice(null);
+                      if (allowPublicRegistration) {
+                        setCurrentTab('register');
+                        setRegistrationNotice(null);
+                      }
                     }}
                     className={`flex-1 py-2 rounded-lg text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
                       currentTab === 'register'
@@ -132,8 +150,17 @@ export default function App() {
                         : 'text-[#053B50]/70 hover:text-[#053B50]'
                     }`}
                   >
-                    <UserPlus className="w-3.5 h-3.5" />
-                    <span>إنشاء حساب</span>
+                    {allowPublicRegistration ? (
+                      <>
+                        <UserPlus className="w-3.5 h-3.5" />
+                        <span>إنشاء حساب</span>
+                      </>
+                    ) : (
+                      <>
+                        <Lock className="w-3.5 h-3.5 text-[#053B50]/50" />
+                        <span className="text-[#053B50]/50">التسجيل مغلق</span>
+                      </>
+                    )}
                   </button>
                 </div>
 
@@ -142,13 +169,15 @@ export default function App() {
                   <LoginForm
                     onLoginSuccess={handleLoginSuccess}
                     onSwitchToRegister={() => {
-                      setCurrentTab('register');
-                      setRegistrationNotice(null);
+                      if (allowPublicRegistration) {
+                        setCurrentTab('register');
+                        setRegistrationNotice(null);
+                      }
                     }}
                     onForgotPassword={() => setShowForgotModal(true)}
                     successMessage={registrationNotice}
                   />
-                ) : (
+                ) : allowPublicRegistration ? (
                   <RegisterForm
                     onSuccess={handleRegisterSuccess}
                     onSwitchToLogin={() => {
@@ -156,6 +185,21 @@ export default function App() {
                       setRegistrationNotice(null);
                     }}
                   />
+                ) : (
+                  <div className="text-center py-8 bg-[#F7F3EE] rounded-xl border border-[#E8DAC8] p-4">
+                    <Lock className="w-8 h-8 text-amber-600 mx-auto mb-2" />
+                    <h4 className="font-bold text-sm text-[#053B50]">تم إغلاق التسجيل الخارجي</h4>
+                    <p className="text-xs text-[#053B50]/70 mt-1 mb-4">
+                      قام المشرف العام بتعطيل إنشاء الحسابات من الخارج. يتم إنشاء الحسابات حالياً حصرياً عبر إدارة النظام.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setCurrentTab('login')}
+                      className="bg-[#053B50] text-[#FFFFFF] text-xs font-bold px-4 py-2 rounded-xl"
+                    >
+                      العودة لتسجيل الدخول
+                    </button>
+                  </div>
                 )}
               </div>
             </motion.div>
@@ -164,37 +208,21 @@ export default function App() {
       </main>
 
       {/* Forgot Password Modal */}
-      <ForgotPasswordModal
-        isOpen={showForgotModal}
-        onClose={() => setShowForgotModal(false)}
-        onSuccess={() => {
-          setShowForgotModal(false);
-          setCurrentTab('login');
-          setRegistrationNotice('تم تحديث كلمة المرور بنجاح. يمكنك الآن تسجيل الدخول.');
-        }}
-      />
+      {showForgotModal && (
+        <ForgotPasswordModal
+          onClose={() => setShowForgotModal(false)}
+          onSuccess={() => {
+            setShowForgotModal(false);
+            setRegistrationNotice('تم تحديث كلمة المرور بنجاح! يمكنك الآن تسجيل الدخول بكلمة المرور الجديدة.');
+          }}
+        />
+      )}
 
-      {/* Footer Area with Exact Required Text */}
-      <footer
-        id="app-footer"
-        className="w-full bg-[#FFFFFF] border-t border-[#E8DAC8] py-6 px-4 z-10"
-      >
-        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4 text-center sm:text-right">
-          {/* Exact phrase requested: "جميع الحقوق محفوظة لمجمع عزم التعليمي" */}
-          <div className="flex items-center gap-2">
-            <div className="w-2.5 h-2.5 rounded-full bg-[#053B50]" />
-            <p className="text-sm font-bold text-[#053B50]">
-              جميع الحقوق محفوظة لمجمع عزم التعليمي
-            </p>
-          </div>
-
-          {/* Educational Identity and Verification Status */}
-          <div className="flex items-center gap-3 text-xs text-[#053B50]/75">
-            <span className="hidden sm:inline">نظام البوابة الإلكترونية المعتمد</span>
-            <span className="w-1.5 h-1.5 rounded-full bg-[#E8DAC8]" />
-            <span className="font-semibold">بوابة 2026</span>
-          </div>
-        </div>
+      {/* Footer */}
+      <footer className="w-full bg-[#FFFFFF] border-t border-[#E8DAC8]/70 py-4 px-4 text-center z-10">
+        <p className="text-xs text-[#053B50]/65 font-medium">
+          جميع الحقوق محفوظة © {new Date().getFullYear()} • مجمع عزم التعليمي لإدارة الحلقات والمجمعات القرآنية
+        </p>
       </footer>
     </div>
   );

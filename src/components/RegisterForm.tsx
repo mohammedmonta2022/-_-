@@ -143,6 +143,7 @@ export const RegisterForm: React.FC<RegisterFormProps> = ({
         username: username.trim(),
         email: email.trim().toLowerCase(),
         password: password,
+        role: 'student',
         createdAt: new Date().toISOString(),
         isVerified: true,
       });

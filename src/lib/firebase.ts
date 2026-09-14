@@ -10,6 +10,7 @@ import {
   where,
   deleteDoc,
   getDocFromServer,
+  writeBatch,
 } from 'firebase/firestore';
 import {
   getAuth,
@@ -18,7 +19,14 @@ import {
   onAuthStateChanged,
   type User,
 } from 'firebase/auth';
-import type { UserAccount, VerificationCodeRecord, SystemConfig } from '../types';
+import type {
+  UserAccount,
+  VerificationCodeRecord,
+  SystemConfig,
+  QuranComplex,
+  QuranCircle,
+  RecitationRecord,
+} from '../types';
 import firebaseConfig from '../../firebase-applet-config.json';
 
 // Initialize Firebase App safely
@@ -28,16 +36,6 @@ const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 const firestoreDbId = firebaseConfig.firestoreDatabaseId || 'ai-studio-8693706e-c5dd-4536-89e2-841d263fe9b5';
 export const db = getFirestore(app, firestoreDbId);
 export const auth = getAuth(app);
-
-// Purge any residual local storage from browser to enforce Firebase Firestore only
-try {
-  localStorage.removeItem('azm_users_store_v1');
-  localStorage.removeItem('azm_codes_store_v1');
-  localStorage.removeItem('azm_system_config_v1');
-  localStorage.removeItem('azm_system_config');
-} catch {
-  // Ignore
-}
 
 // Google Provider with Gmail Send scope
 const provider = new GoogleAuthProvider();
@@ -50,9 +48,9 @@ provider.setCustomParameters({
 (async function testConnection() {
   try {
     await getDocFromServer(doc(db, 'system_config', 'mailer_settings'));
-    console.log(`[Firebase Firestore] Connected successfully to database: ${firestoreDbId}`);
-  } catch (error) {
-    console.info('[Firebase Firestore] Initialized database connection:', firestoreDbId);
+    console.log(`[Firestore] Connected successfully to database: ${firestoreDbId}`);
+  } catch {
+    console.info('[Firestore] Initialized database connection:', firestoreDbId);
   }
 })();
 
@@ -60,9 +58,6 @@ provider.setCustomParameters({
 let cachedAccessToken: string | null = null;
 let isSigningIn = false;
 
-/**
- * Initialize Auth State Listener
- */
 export const initAuth = (
   onAuthSuccess?: (user: User, token: string) => void,
   onAuthFailure?: () => void
@@ -82,9 +77,6 @@ export const initAuth = (
   });
 };
 
-/**
- * Connect or sign in via Google to acquire Gmail send access token
- */
 export const googleSignIn = async (): Promise<{ user: User; accessToken: string } | null> => {
   try {
     isSigningIn = true;
@@ -104,23 +96,14 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string 
   }
 };
 
-/**
- * Get current in-memory access token
- */
 export const getAccessToken = (): string | null => {
   return cachedAccessToken;
 };
 
-/**
- * Set access token in memory
- */
 export const setAccessToken = (token: string | null): void => {
   cachedAccessToken = token;
 };
 
-/**
- * Logout from Firebase Auth
- */
 export const logoutAuth = async () => {
   await auth.signOut();
   cachedAccessToken = null;
@@ -131,6 +114,9 @@ const USERS_COLLECTION = 'users';
 const VERIFICATION_COLLECTION = 'verification_codes';
 const SYSTEM_CONFIG_COLLECTION = 'system_config';
 const MAILER_DOC_ID = 'mailer_settings';
+const COMPLEXES_COLLECTION = 'quran_complexes';
+const CIRCLES_COLLECTION = 'quran_circles';
+const RECITATIONS_COLLECTION = 'recitations';
 
 /**
  * Retrieve System Configuration directly from Firestore
@@ -157,6 +143,7 @@ export async function saveSystemConfig(config: Partial<SystemConfig>): Promise<v
     senderName: 'مجمع عزم التعليمي',
     isConfigured: false,
     firstUserRegistered: false,
+    allowPublicRegistration: true,
   };
 
   const updated: SystemConfig = {
@@ -168,15 +155,11 @@ export async function saveSystemConfig(config: Partial<SystemConfig>): Promise<v
     accessToken: config.accessToken ?? current.accessToken,
     authorizedAt: config.authorizedAt ?? current.authorizedAt,
     configuredAt: new Date().toISOString(),
+    allowPublicRegistration: config.allowPublicRegistration !== undefined ? config.allowPublicRegistration : (current.allowPublicRegistration ?? true),
   };
 
   const ref = doc(db, SYSTEM_CONFIG_COLLECTION, MAILER_DOC_ID);
   await setDoc(ref, updated, { merge: true });
-  console.log('[Firestore] System configuration & authorization saved to Firestore:', {
-    senderEmail: updated.senderEmail,
-    isAuthorized: updated.isAuthorized,
-    hasToken: Boolean(updated.accessToken),
-  });
 }
 
 /**
@@ -210,7 +193,6 @@ export async function authorizeSenderEmail(userEmail: string): Promise<{ success
 
     cachedAccessToken = authResult.accessToken;
 
-    // Save directly into Firestore in system_config/mailer_settings
     await saveSystemConfig({
       senderEmail: userEmail || authResult.user.email || '',
       senderName: 'مجمع عزم التعليمي',
@@ -240,56 +222,138 @@ export async function getOfficialSenderEmail(): Promise<string | null> {
 
 /**
  * Save user strictly to Firebase Firestore.
- * If this is the first user in Firestore, automatically mark them as Admin & Official Sender!
  */
 export async function createUserAccount(user: Omit<UserAccount, 'id'>): Promise<string> {
-  const cleanEmail = user.email.toLowerCase().trim();
+  const cleanEmail = user.email ? user.email.toLowerCase().trim() : '';
   const cleanUsername = user.username.trim();
   const id = `user_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
-  // Check if system already has registered users or a sender email in Firestore
   const existingConfig = await getSystemConfig();
   const isFirstUser = !existingConfig || !existingConfig.firstUserRegistered || !existingConfig.senderEmail;
+
+  const determinedRole = user.role || (isFirstUser ? 'general_admin' : 'student');
 
   const newUserData: UserAccount = {
     ...user,
     id,
     email: cleanEmail,
     username: cleanUsername,
-    role: user.role || (isFirstUser ? 'admin' : 'user'),
-    isOfficialSender: user.isOfficialSender !== undefined ? user.isOfficialSender : isFirstUser,
+    role: determinedRole,
+    isOfficialSender: user.isOfficialSender !== undefined ? user.isOfficialSender : (isFirstUser || determinedRole === 'general_admin'),
+    createdAt: user.createdAt || new Date().toISOString(),
+    isVerified: user.isVerified ?? false,
   };
 
-  // 1. If this is the first user, record in system_config in Firestore
-  if (isFirstUser) {
+  const userDocRef = doc(db, USERS_COLLECTION, id);
+  await setDoc(userDocRef, newUserData);
+
+  if (isFirstUser && cleanEmail) {
     await saveSystemConfig({
       senderEmail: cleanEmail,
-      senderName: 'مجمع عزم التعليمي',
       isConfigured: true,
       firstUserRegistered: true,
     });
   }
 
-  // 2. Persist directly to Firestore users collection
-  const userRef = doc(collection(db, USERS_COLLECTION), id);
-  await setDoc(userRef, newUserData);
-  console.log(`[Firestore] User saved successfully in Firestore: ${cleanUsername} (${id})`);
-
   return id;
 }
 
 /**
- * Find user strictly in Firebase Firestore by username or email
+ * Batch create multiple accounts with unified password and role
+ */
+export async function createBatchUsers(
+  usernames: string[],
+  role: UserAccount['role'],
+  defaultPassword: string,
+  complexId?: string,
+  complexName?: string,
+  circleId?: string,
+  circleName?: string
+): Promise<{ count: number }> {
+  const batch = writeBatch(db);
+  let count = 0;
+  const now = new Date().toISOString();
+
+  for (const name of usernames) {
+    const trimmed = name.trim();
+    if (!trimmed) continue;
+    const id = `user_${Date.now()}_${Math.random().toString(36).substring(2, 7)}_${count}`;
+    const userDocRef = doc(db, USERS_COLLECTION, id);
+    const newUserData: UserAccount = {
+      id,
+      username: trimmed,
+      email: `${trimmed.toLowerCase().replace(/[^a-z0-9]/g, '')}_${Math.floor(1000 + Math.random() * 9000)}@azm-quran.edu`,
+      password: defaultPassword,
+      createdAt: now,
+      isVerified: true,
+      role: role || 'student',
+      complexId,
+      complexName,
+      circleId,
+      circleName,
+    };
+    batch.set(userDocRef, newUserData);
+    count++;
+  }
+
+  if (count > 0) {
+    await batch.commit();
+  }
+  return { count };
+}
+
+/**
+ * Update user account details
+ */
+export async function updateUserAccount(userId: string, data: Partial<UserAccount>): Promise<boolean> {
+  try {
+    const userDoc = doc(db, USERS_COLLECTION, userId);
+    await setDoc(userDoc, data, { merge: true });
+    return true;
+  } catch (err) {
+    console.error('[Firestore] Error updating user:', err);
+    return false;
+  }
+}
+
+/**
+ * Delete user account from Firestore
+ */
+export async function deleteUserAccount(userId: string): Promise<boolean> {
+  try {
+    const userDoc = doc(db, USERS_COLLECTION, userId);
+    await deleteDoc(userDoc);
+    return true;
+  } catch (err) {
+    console.error('[Firestore] Error deleting user:', err);
+    return false;
+  }
+}
+
+/**
+ * List all users
+ */
+export async function getAllUsers(): Promise<UserAccount[]> {
+  try {
+    const snap = await getDocs(collection(db, USERS_COLLECTION));
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() } as UserAccount));
+  } catch (err) {
+    console.error('[Firestore] Error fetching users:', err);
+    return [];
+  }
+}
+
+/**
+ * Find user strictly in Firebase Firestore
  */
 export async function findUser(identifier: string): Promise<UserAccount | null> {
   const cleanId = identifier.trim();
-  const lower = cleanId.toLowerCase();
+  const cleanEmail = cleanId.toLowerCase();
 
   try {
-    // 1. Query Firestore by email
     const qEmail = query(
       collection(db, USERS_COLLECTION),
-      where('email', '==', lower)
+      where('email', '==', cleanEmail)
     );
     const emailSnap = await getDocs(qEmail);
     if (!emailSnap.empty) {
@@ -297,7 +361,6 @@ export async function findUser(identifier: string): Promise<UserAccount | null> 
       return { id: d.id, ...d.data() } as UserAccount;
     }
 
-    // 2. Query Firestore by username
     const qUser = query(
       collection(db, USERS_COLLECTION),
       where('username', '==', cleanId)
@@ -316,7 +379,7 @@ export async function findUser(identifier: string): Promise<UserAccount | null> 
 }
 
 /**
- * Save a 6-digit verification code strictly to Firebase Firestore with 10-minute expiration
+ * Save a 6-digit verification code strictly to Firebase Firestore
  */
 export async function saveVerificationCode(
   email: string,
@@ -335,10 +398,8 @@ export async function saveVerificationCode(
     expiresAt: expiresAt.toISOString(),
   };
 
-  // Persist directly to Firestore verification_codes collection
   const codeRef = doc(collection(db, VERIFICATION_COLLECTION));
   await setDoc(codeRef, newRecord);
-  console.log(`[Firestore] Verification code saved in Firestore for: ${cleanEmail}`);
 }
 
 /**
@@ -366,9 +427,8 @@ export async function verifyCode(
         if (data.code === cleanInput) {
           const expires = new Date(data.expiresAt).getTime();
           if (Date.now() <= expires) {
-            // Delete used code from Firestore
             await deleteDoc(d.ref).catch(() => {});
-            return { success: true, message: 'تم التحقق بنجاح من قاعدة بيانات Firebase' };
+            return { success: true, message: 'تم التحقق بنجاح' };
           }
         }
       }
@@ -396,7 +456,6 @@ export async function updateUserPassword(email: string, newPassword: string): Pr
     if (!snap.empty) {
       const userDoc = snap.docs[0];
       await setDoc(userDoc.ref, { password: newPassword }, { merge: true });
-      console.log(`[Firestore] Password updated in Firestore for: ${cleanEmail}`);
       return true;
     }
   } catch (err) {
@@ -405,4 +464,201 @@ export async function updateUserPassword(email: string, newPassword: string): Pr
   }
 
   return false;
+}
+
+// ==========================================
+// QURAN COMPLEXES & CIRCLES FIRESTORE CRUD
+// ==========================================
+
+export async function addComplex(name: string, locationName?: string, lat?: number, lng?: number): Promise<QuranComplex> {
+  const id = `complex_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+  const complex: QuranComplex = {
+    id,
+    name: name.trim(),
+    locationName: locationName?.trim() || '',
+    latitude: lat,
+    longitude: lng,
+    createdAt: new Date().toISOString(),
+  };
+  await setDoc(doc(db, COMPLEXES_COLLECTION, id), complex);
+  return complex;
+}
+
+export async function getComplexes(): Promise<QuranComplex[]> {
+  try {
+    const snap = await getDocs(collection(db, COMPLEXES_COLLECTION));
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() } as QuranComplex));
+  } catch (err) {
+    console.error('[Firestore] Error fetching complexes:', err);
+    return [];
+  }
+}
+
+export async function addCircle(
+  complexId: string,
+  name: string,
+  teacherId?: string,
+  teacherName?: string
+): Promise<QuranCircle> {
+  const id = `circle_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+  const circle: QuranCircle = {
+    id,
+    complexId,
+    name: name.trim(),
+    teacherId: teacherId || '',
+    teacherName: teacherName || '',
+    createdAt: new Date().toISOString(),
+  };
+  await setDoc(doc(db, CIRCLES_COLLECTION, id), circle);
+  return circle;
+}
+
+export async function getCircles(complexId?: string): Promise<QuranCircle[]> {
+  try {
+    if (complexId) {
+      const q = query(collection(db, CIRCLES_COLLECTION), where('complexId', '==', complexId));
+      const snap = await getDocs(q);
+      return snap.docs.map((d) => ({ id: d.id, ...d.data() } as QuranCircle));
+    }
+    const snap = await getDocs(collection(db, CIRCLES_COLLECTION));
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() } as QuranCircle));
+  } catch (err) {
+    console.error('[Firestore] Error fetching circles:', err);
+    return [];
+  }
+}
+
+// ==========================================
+// RECITATIONS (تسميع القرآن والسجلات)
+// ==========================================
+
+export async function addRecitation(recitation: Omit<RecitationRecord, 'id' | 'createdAt'>): Promise<string> {
+  const id = `rec_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+  const fullRecord: RecitationRecord = {
+    ...recitation,
+    id,
+    createdAt: new Date().toISOString(),
+  };
+  await setDoc(doc(db, RECITATIONS_COLLECTION, id), fullRecord);
+  return id;
+}
+
+export async function getRecitations(filters?: {
+  complexId?: string;
+  circleId?: string;
+  studentId?: string;
+  date?: string;
+}): Promise<RecitationRecord[]> {
+  try {
+    let q = query(collection(db, RECITATIONS_COLLECTION));
+    if (filters?.complexId) {
+      q = query(q, where('complexId', '==', filters.complexId));
+    }
+    if (filters?.circleId) {
+      q = query(q, where('circleId', '==', filters.circleId));
+    }
+    if (filters?.studentId) {
+      q = query(q, where('studentId', '==', filters.studentId));
+    }
+    if (filters?.date) {
+      q = query(q, where('date', '==', filters.date));
+    }
+    const snap = await getDocs(q);
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() } as RecitationRecord));
+  } catch (err) {
+    console.error('[Firestore] Error fetching recitations:', err);
+    return [];
+  }
+}
+
+/**
+ * Seed initial sample Quran educational data if empty to showcase the stats immediately
+ */
+export async function seedInitialQuranDataIfEmpty(): Promise<void> {
+  try {
+    const existingComplexes = await getComplexes();
+    if (existingComplexes.length > 0) return;
+
+    // 1. Add Default Quran Complexes
+    const c1 = await addComplex('مجمع جامع الهدى القرآني', 'حي النزهة - الرياض', 24.7136, 46.6753);
+    const c2 = await addComplex('مجمع الإمام نافع لتحفيظ القرآن', 'حي الروضة - الرياض', 24.7431, 46.7725);
+    const c3 = await addComplex('مجمع الإمام عاصم النموذجي', 'حي الياسمين - الرياض', 24.8122, 46.6341);
+
+    // 2. Add Circles
+    const cir1 = await addCircle(c1.id, 'حلقة الإتقان (الفجر)', 'teacher_1', 'الشيخ عبدالرحمن السديس');
+    const cir2 = await addCircle(c1.id, 'حلقة التبيان (العصر)', 'teacher_2', 'الشيخ مشاري راشد');
+    const cir3 = await addCircle(c2.id, 'حلقة الماهر بالقرآن', 'teacher_3', 'الشيخ ماهر المعيقلي');
+    const cir4 = await addCircle(c3.id, 'حلقة الفرقان (المغرب)', 'teacher_4', 'الشيخ سعد الغامدي');
+
+    // 3. Add Students
+    const today = new Date().toISOString().split('T')[0];
+    const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
+
+    const students = [
+      { name: 'عبدالله بن أحمد الفهيد', circle: cir1, complex: c1 },
+      { name: 'محمد بن يوسف القحطاني', circle: cir1, complex: c1 },
+      { name: 'عمر بن خالد السليمان', circle: cir2, complex: c1 },
+      { name: 'سعد بن عبدالعزيز الدوسري', circle: cir3, complex: c2 },
+      { name: 'إبراهيم بن صالح الغامدي', circle: cir3, complex: c2 },
+      { name: 'خالد بن ناصر العتيبي', circle: cir4, complex: c3 },
+      { name: 'فيصل بن نايف المطيري', circle: cir4, complex: c3 },
+    ];
+
+    for (let i = 0; i < students.length; i++) {
+      const s = students[i];
+      const sId = `student_${i + 1}`;
+      await setDoc(doc(db, USERS_COLLECTION, sId), {
+        id: sId,
+        username: s.name,
+        email: `student${i + 1}@azm-quran.edu`,
+        password: 'password123',
+        role: 'student',
+        isVerified: true,
+        createdAt: new Date().toISOString(),
+        complexId: s.complex.id,
+        complexName: s.complex.name,
+        circleId: s.circle.id,
+        circleName: s.circle.name,
+      });
+
+      // Add recitations for today
+      await addRecitation({
+        studentId: sId,
+        studentName: s.name,
+        circleId: s.circle.id,
+        circleName: s.circle.name,
+        complexId: s.complex.id,
+        date: today,
+        type: i % 2 === 0 ? 'جديد' : 'مراجعة صغرى',
+        surah: i === 0 ? 'البقرة' : i === 1 ? 'آل عمران' : i === 2 ? 'النساء' : 'المائدة',
+        ayahFrom: 1 + i * 15,
+        ayahTo: 30 + i * 25,
+        pagesCount: 2 + (i % 4),
+        versesCount: 35 + i * 12,
+        notes: 'قراءة متقنة مع أحكام التجويد والمدود',
+        complaints: 'لا يوجد أي ملاحظات',
+      });
+
+      // Add recitations for yesterday
+      await addRecitation({
+        studentId: sId,
+        studentName: s.name,
+        circleId: s.circle.id,
+        circleName: s.circle.name,
+        complexId: s.complex.id,
+        date: yesterday,
+        type: 'تراكمي',
+        surah: 'الكهف',
+        ayahFrom: 1,
+        ayahTo: 45,
+        pagesCount: 3,
+        versesCount: 45,
+        notes: 'مراجعة ممتازة وحفظ راسخ',
+      });
+    }
+
+    console.log('[Firestore] Successfully seeded initial Quran education data.');
+  } catch (err) {
+    console.error('[Firestore] Error seeding initial data:', err);
+  }
 }
