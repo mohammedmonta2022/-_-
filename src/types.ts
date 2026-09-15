@@ -72,6 +72,9 @@ export interface SystemConfig {
   authorizedBy?: string;
   configuredAt?: string;
   allowPublicRegistration?: boolean; // إمكانية إغلاق إنشاء الحسابات من الخارج
+  preventAutoSeed?: boolean;          // منع إعادة إدراج البيانات التلقائية بعد التصفير
+  hasBeenWiped?: boolean;
+  wipedAt?: string;
 }
 
 export type AuthTab = 'login' | 'register';

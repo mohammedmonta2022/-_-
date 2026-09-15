@@ -15,6 +15,9 @@ import {
   Check,
   Globe,
   Lock,
+  Settings,
+  Trash2,
+  ShieldAlert,
 } from 'lucide-react';
 import type { UserAccount, SystemConfig, QuranComplex, QuranCircle, RecitationRecord } from '../types';
 import {
@@ -40,6 +43,7 @@ import {
   updateCircle,
   deleteCircle,
   moveCircle,
+  wipeAllSystemDataExceptSupervisor,
 } from '../lib/firebase';
 import { sendEmailViaGmail } from '../lib/gmail';
 import { HomeDashboardTab } from './HomeDashboardTab';
@@ -83,6 +87,14 @@ export const WelcomeDashboard: React.FC<WelcomeDashboardProps> = ({ user, onLogo
   const [customSenderEmail, setCustomSenderEmail] = useState(user.email || '');
   const [customSenderName, setCustomSenderName] = useState('مجمع عزم التعليمي');
 
+  // Data Wipe States
+  const [isWipingData, setIsWipingData] = useState(false);
+  const [showWipeConfirmModal, setShowWipeConfirmModal] = useState(false);
+  const [wipeConfirmationInput, setWipeConfirmationInput] = useState('');
+  const [wipeSuccessMsg, setWipeSuccessMsg] = useState<string | null>(null);
+  const [wipeErrorMsg, setWipeErrorMsg] = useState<string | null>(null);
+  const [isTogglingRegInSettings, setIsTogglingRegInSettings] = useState(false);
+
   const isSenderAdmin = Boolean(
     user.isOfficialSender ||
     user.role === 'general_admin' ||
@@ -93,15 +105,17 @@ export const WelcomeDashboard: React.FC<WelcomeDashboardProps> = ({ user, onLogo
   const loadAllData = async () => {
     setIsLoadingData(true);
     try {
-      // Seed sample data if empty so admin immediately sees the counters and rankings
-      await seedInitialQuranDataIfEmpty();
+      const config = await getSystemConfig();
+      // Only seed initial sample data if the system has never been wiped and auto-seed is not prevented
+      if (!config?.preventAutoSeed && !config?.hasBeenWiped) {
+        await seedInitialQuranDataIfEmpty();
+      }
 
-      const [comps, circs, recs, allUsers, config] = await Promise.all([
+      const [comps, circs, recs, allUsers] = await Promise.all([
         getComplexes(),
         getCircles(),
         getRecitations(),
         getAllUsers(),
-        getSystemConfig(),
         getSavedSenderToken(),
       ]);
 
@@ -408,8 +422,67 @@ export const WelcomeDashboard: React.FC<WelcomeDashboardProps> = ({ user, onLogo
 
   // Toggle External Registration
   const handleTogglePublicRegistration = async (allow: boolean) => {
-    await saveSystemConfig({ allowPublicRegistration: allow });
-    setSystemConfig((prev) => (prev ? { ...prev, allowPublicRegistration: allow } : null));
+    setIsTogglingRegInSettings(true);
+    try {
+      await saveSystemConfig({ allowPublicRegistration: allow });
+      setSystemConfig((prev) => (prev ? { ...prev, allowPublicRegistration: allow } : null));
+    } finally {
+      setIsTogglingRegInSettings(false);
+    }
+  };
+
+  // Wipe All System Data Except Authorized Supervisor
+  const handleWipeAllData = async () => {
+    if (wipeConfirmationInput.trim() !== 'حذف الكل') {
+      setWipeErrorMsg('يرجى كتابة "حذف الكل" في الحقل لتأكيد العملية الحساسة.');
+      return;
+    }
+
+    setIsWipingData(true);
+    setWipeErrorMsg(null);
+    setWipeSuccessMsg(null);
+    try {
+      const res = await wipeAllSystemDataExceptSupervisor({
+        id: user.id,
+        username: user.username,
+        email: user.email,
+      });
+
+      // Instantly clear local collections in dashboard state
+      setComplexes([]);
+      setCircles([]);
+      setRecitations([]);
+      setUsersList((prev) =>
+        prev.filter((u) => {
+          const uName = (u.username || '').trim().toLowerCase();
+          const uEmail = (u.email || '').trim().toLowerCase();
+          const myName = (user.username || '').trim().toLowerCase();
+          const myEmail = (user.email || '').trim().toLowerCase();
+          return (
+            (user.id && u.id === user.id) ||
+            (myName && uName === myName) ||
+            (myEmail && uEmail === myEmail)
+          );
+        })
+      );
+
+      await loadAllData();
+      const totalDeleted =
+        res.deletedUsersCount +
+        res.deletedComplexesCount +
+        res.deletedCirclesCount +
+        res.deletedRecitationsCount;
+      setWipeSuccessMsg(
+        `تم بنجاح تصفير وحذف جميع بيانات النظام من أوله لآخره (إجمالي المحذوفات: ${totalDeleted} عنصر - تم حذف ${res.deletedUsersCount} حساب مستخدم، ${res.deletedComplexesCount} مجمع، ${res.deletedCirclesCount} حلقة، ${res.deletedRecitationsCount} سجل تسميع). وتم الإبقاء على حساب المشرف المعتمد (${user.username}) فقط.`
+      );
+      setShowWipeConfirmModal(false);
+      setWipeConfirmationInput('');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setWipeErrorMsg(`حدث خطأ أثناء مسح بيانات النظام: ${msg}`);
+    } finally {
+      setIsWipingData(false);
+    }
   };
 
   return (
@@ -515,8 +588,8 @@ export const WelcomeDashboard: React.FC<WelcomeDashboardProps> = ({ user, onLogo
               : 'bg-transparent text-[#053B50] hover:bg-[#F7F3EE]'
           }`}
         >
-          <Mail className="w-4 h-4" />
-          <span>إعدادات بريد الإرسال</span>
+          <Settings className="w-4 h-4" />
+          <span>الإعدادات العامة</span>
         </button>
       </nav>
 
@@ -568,202 +641,458 @@ export const WelcomeDashboard: React.FC<WelcomeDashboardProps> = ({ user, onLogo
         />
       )}
 
-      {/* Tab 4: Mailer Settings Tab */}
+      {/* Tab 4: General Settings Tab */}
       {activeTab === 'settings' && (
-        <div className="bg-[#FFFFFF] border-2 border-[#E8DAC8] rounded-2xl p-6 sm:p-8 shadow-xs max-w-3xl mx-auto space-y-6">
-          {/* Header */}
-          <div className="flex items-start sm:items-center justify-between gap-4 pb-4 border-b border-[#E8DAC8]">
-            <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-2xl bg-[#053B50] text-[#E8DAC8] flex items-center justify-center shadow-xs">
-                <Mail className="w-6 h-6" />
+        <div className="max-w-4xl mx-auto space-y-6">
+          {/* Top Alerts */}
+          {wipeSuccessMsg && (
+            <div className="p-4 bg-emerald-50 border-2 border-emerald-300 text-emerald-900 rounded-2xl text-xs font-bold flex items-start gap-3 shadow-xs">
+              <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <p className="font-black text-sm text-emerald-800">عملية تصفير ناجحة</p>
+                <p>{wipeSuccessMsg}</p>
               </div>
+            </div>
+          )}
+
+          {wipeErrorMsg && (
+            <div className="p-4 bg-red-50 border-2 border-red-300 text-red-900 rounded-2xl text-xs font-bold flex items-start gap-3 shadow-xs">
+              <AlertCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <p className="font-black text-sm text-red-800">تنبيه أثناء العملية</p>
+                <p>{wipeErrorMsg}</p>
+              </div>
+            </div>
+          )}
+
+          {/* Section 1: Email Authorization & Sender Config */}
+          <div className="bg-[#FFFFFF] border-2 border-[#E8DAC8] rounded-2xl p-6 sm:p-8 shadow-xs space-y-6">
+            <div className="flex items-start sm:items-center justify-between gap-4 pb-4 border-b border-[#E8DAC8]">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-2xl bg-[#053B50] text-[#E8DAC8] flex items-center justify-center shadow-xs">
+                  <Mail className="w-6 h-6" />
+                </div>
+                <div>
+                  <h2 className="text-xl font-black text-[#053B50]">
+                    تفويض بريد المشرف المعتمد للنظام
+                  </h2>
+                  <p className="text-xs text-[#053B50]/75">
+                    اعتماد وتثبيت الحساب المخول بإرسال رسائل التحقق وتغيير كلمات المرور
+                  </p>
+                </div>
+              </div>
+
+              <span
+                className={`px-3 py-1 rounded-full text-xs font-bold flex items-center gap-1.5 shrink-0 ${
+                  hasGmailAuth
+                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                    : 'bg-amber-100 text-amber-800 border border-amber-300'
+                }`}
+              >
+                {hasGmailAuth ? (
+                  <>
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    مفعل ومحفوظ دائماً
+                  </>
+                ) : (
+                  <>
+                    <AlertCircle className="w-3.5 h-3.5" />
+                    بانتظار التفويض
+                  </>
+                )}
+              </span>
+            </div>
+
+            {/* Permanent Status Overview Card */}
+            <div className="bg-[#F7F3EE] p-5 rounded-xl border border-[#E8DAC8] space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+                <span className="text-[#053B50]/70 font-bold">البريد الإلكتروني المعتمد حالياً:</span>
+                <strong dir="ltr" className="font-mono text-sm text-[#053B50] bg-[#FFFFFF] px-3 py-1 rounded-lg border border-[#E8DAC8]">
+                  {systemConfig?.senderEmail || user.email || 'لم يحدد بعد'}
+                </strong>
+              </div>
+
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+                <span className="text-[#053B50]/70 font-bold">حالة الحفظ والاستمرارية:</span>
+                {hasGmailAuth ? (
+                  <span className="text-emerald-800 font-bold flex items-center gap-1">
+                    <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                    محفوظ للأبد في قاعدة البيانات (يبقى مفعلاً حتى بعد إغلاق الجهاز أو تحديث الموقع)
+                  </span>
+                ) : (
+                  <span className="text-amber-800 font-bold flex items-center gap-1">
+                    <AlertCircle className="w-4 h-4 text-amber-600" />
+                    غير مفوض حالياً
+                  </span>
+                )}
+              </div>
+
+              {systemConfig?.authorizedAt && (
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-[11px] text-[#053B50]/60 border-t border-[#E8DAC8]/60 pt-2">
+                  <span>تاريخ آخر تفويض وتثبيت:</span>
+                  <span dir="ltr">{new Date(systemConfig.authorizedAt).toLocaleString('ar-SA')}</span>
+                </div>
+              )}
+
+              {systemConfig?.authorizedBy && (
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-[11px] text-[#053B50]/60">
+                  <span>المشرف المفوض:</span>
+                  <span className="font-bold text-[#053B50]">{systemConfig.authorizedBy}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Email Settings Configuration Form */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <h2 className="text-xl font-black text-[#053B50]">
-                  تفويض بريد المشرف المعتمد للنظام
-                </h2>
-                <p className="text-xs text-[#053B50]/75">
-                  اعتماد وتثبيت الحساب المخول بإرسال رسائل التحقق وتغيير كلمات المرور
-                </p>
+                <label className="block text-xs font-bold text-[#053B50] mb-1.5">
+                  البريد الإلكتروني للمشرف المراد اعتماده
+                </label>
+                <input
+                  type="email"
+                  value={customSenderEmail}
+                  onChange={(e) => setCustomSenderEmail(e.target.value)}
+                  placeholder="supervisor@example.com"
+                  dir="ltr"
+                  className="w-full bg-[#FFFFFF] border-2 border-[#E8DAC8] focus:border-[#053B50] rounded-xl px-3.5 py-2.5 text-xs text-[#053B50] outline-none transition-colors"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-[#053B50] mb-1.5">
+                  اسم الجهة المرسلة (يظهر في بريد الطلاب)
+                </label>
+                <input
+                  type="text"
+                  value={customSenderName}
+                  onChange={(e) => setCustomSenderName(e.target.value)}
+                  placeholder="مجمع عزم التعليمي"
+                  className="w-full bg-[#FFFFFF] border-2 border-[#E8DAC8] focus:border-[#053B50] rounded-xl px-3.5 py-2.5 text-xs text-[#053B50] outline-none transition-colors"
+                />
               </div>
             </div>
 
-            <span
-              className={`px-3 py-1 rounded-full text-xs font-bold flex items-center gap-1.5 shrink-0 ${
-                hasGmailAuth
-                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                  : 'bg-amber-100 text-amber-800 border border-amber-300'
-              }`}
-            >
-              {hasGmailAuth ? (
-                <>
-                  <CheckCircle2 className="w-3.5 h-3.5" />
-                  مفعل ومحفوظ دائماً
-                </>
-              ) : (
-                <>
-                  <AlertCircle className="w-3.5 h-3.5" />
-                  بانتظار التفويض
-                </>
-              )}
-            </span>
-          </div>
-
-          {/* Permanent Status Overview Card */}
-          <div className="bg-[#F7F3EE] p-5 rounded-xl border border-[#E8DAC8] space-y-3">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
-              <span className="text-[#053B50]/70 font-bold">البريد الإلكتروني المعتمد حالياً:</span>
-              <strong dir="ltr" className="font-mono text-sm text-[#053B50] bg-[#FFFFFF] px-3 py-1 rounded-lg border border-[#E8DAC8]">
-                {systemConfig?.senderEmail || user.email || 'لم يحدد بعد'}
-              </strong>
-            </div>
-
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
-              <span className="text-[#053B50]/70 font-bold">حالة الحفظ والاستمرارية:</span>
-              {hasGmailAuth ? (
-                <span className="text-emerald-800 font-bold flex items-center gap-1">
-                  <ShieldCheck className="w-4 h-4 text-emerald-600" />
-                  محفوظ للأبد في قاعدة البيانات (يبقى مفعلاً حتى بعد إغلاق الجهاز أو تحديث الموقع)
-                </span>
-              ) : (
-                <span className="text-amber-800 font-bold flex items-center gap-1">
-                  <AlertCircle className="w-4 h-4 text-amber-600" />
-                  غير مفوض حالياً
-                </span>
-              )}
-            </div>
-
-            {systemConfig?.authorizedAt && (
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-[11px] text-[#053B50]/60 border-t border-[#E8DAC8]/60 pt-2">
-                <span>تاريخ آخر تفويض وتثبيت:</span>
-                <span dir="ltr">{new Date(systemConfig.authorizedAt).toLocaleString('ar-SA')}</span>
-              </div>
-            )}
-
-            {systemConfig?.authorizedBy && (
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-[11px] text-[#053B50]/60">
-                <span>المشرف المفوض:</span>
-                <span className="font-bold text-[#053B50]">{systemConfig.authorizedBy}</span>
-              </div>
-            )}
-          </div>
-
-          {/* Email Settings Configuration Form */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs font-bold text-[#053B50] mb-1.5">
-                البريد الإلكتروني للمشرف المراد اعتماده
-              </label>
-              <input
-                type="email"
-                value={customSenderEmail}
-                onChange={(e) => setCustomSenderEmail(e.target.value)}
-                placeholder="supervisor@example.com"
-                dir="ltr"
-                className="w-full bg-[#FFFFFF] border-2 border-[#E8DAC8] focus:border-[#053B50] rounded-xl px-3.5 py-2.5 text-xs text-[#053B50] outline-none transition-colors"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-[#053B50] mb-1.5">
-                اسم الجهة المرسلة (يظهر في بريد الطلاب)
-              </label>
-              <input
-                type="text"
-                value={customSenderName}
-                onChange={(e) => setCustomSenderName(e.target.value)}
-                placeholder="مجمع عزم التعليمي"
-                className="w-full bg-[#FFFFFF] border-2 border-[#E8DAC8] focus:border-[#053B50] rounded-xl px-3.5 py-2.5 text-xs text-[#053B50] outline-none transition-colors"
-              />
-            </div>
-          </div>
-
-          {/* Feedback Messages */}
-          {authSuccessMsg && (
-            <div className="p-3.5 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl text-xs font-bold flex items-start gap-2.5">
-              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-              <span>{authSuccessMsg}</span>
-            </div>
-          )}
-
-          {errorMsg && (
-            <div className="p-3.5 bg-red-50 border border-red-200 text-red-800 rounded-xl text-xs font-bold flex items-start gap-2.5">
-              <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
-              <span>{errorMsg}</span>
-            </div>
-          )}
-
-          {testEmailResult && (
-            <div
-              className={`p-3.5 rounded-xl text-xs font-bold flex items-start gap-2.5 border ${
-                testEmailResult.success
-                  ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                  : 'bg-amber-50 border-amber-200 text-amber-900'
-              }`}
-            >
-              {testEmailResult.success ? (
+            {/* Feedback Messages */}
+            {authSuccessMsg && (
+              <div className="p-3.5 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl text-xs font-bold flex items-start gap-2.5">
                 <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-              ) : (
-                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-              )}
-              <span>{testEmailResult.msg}</span>
-            </div>
-          )}
+                <span>{authSuccessMsg}</span>
+              </div>
+            )}
 
-          {/* Action Buttons */}
-          <div className="pt-2 flex flex-col sm:flex-row items-stretch sm:items-center gap-3 flex-wrap">
-            {/* Direct Database Permanent Authorization */}
-            <button
-              type="button"
-              onClick={handleDirectPermanentAuthorization}
-              disabled={isSavingDirectly || isAuthorizing}
-              className="bg-[#053B50] hover:bg-[#042E3F] text-[#FFFFFF] font-bold text-xs px-5 py-3 rounded-xl flex items-center justify-center gap-2 shadow-sm cursor-pointer disabled:opacity-50 transition-colors"
-            >
-              <ShieldCheck className="w-4 h-4 text-[#E8DAC8]" />
-              <span>{isSavingDirectly ? 'جاري الحفظ في قاعدة البيانات...' : 'تثبيت وحفظ التفويض الدائم للأبد'}</span>
-            </button>
+            {errorMsg && (
+              <div className="p-3.5 bg-red-50 border border-red-200 text-red-800 rounded-xl text-xs font-bold flex items-start gap-2.5">
+                <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                <span>{errorMsg}</span>
+              </div>
+            )}
 
-            {/* Google OAuth Authorization */}
-            <button
-              type="button"
-              onClick={handleAuthorizeWithGoogle}
-              disabled={isAuthorizing || isSavingDirectly}
-              className="bg-[#FFFFFF] hover:bg-[#F7F3EE] text-[#053B50] border-2 border-[#053B50] font-bold text-xs px-5 py-3 rounded-xl flex items-center justify-center gap-2 shadow-xs cursor-pointer disabled:opacity-50 transition-colors"
-            >
-              <Globe className="w-4 h-4 text-[#053B50]" />
-              <span>{isAuthorizing ? 'جاري الاتصال بـ Google...' : 'ربط وتفويض الحساب عبر Google'}</span>
-            </button>
+            {testEmailResult && (
+              <div
+                className={`p-3.5 rounded-xl text-xs font-bold flex items-start gap-2.5 border ${
+                  testEmailResult.success
+                    ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                    : 'bg-amber-50 border-amber-200 text-amber-900'
+                }`}
+              >
+                {testEmailResult.success ? (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                ) : (
+                  <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                )}
+                <span>{testEmailResult.msg}</span>
+              </div>
+            )}
 
-            {/* Test Email Dispatch */}
-            <button
-              type="button"
-              onClick={handleSendTestEmail}
-              disabled={isSendingTestEmail}
-              className="bg-[#F7F3EE] hover:bg-[#E8DAC8] text-[#053B50] border border-[#E8DAC8] font-bold text-xs px-5 py-3 rounded-xl flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 transition-colors"
-            >
-              <Send className="w-4 h-4" />
-              <span>{isSendingTestEmail ? 'جاري إرسال البريد التجريبي...' : 'إرسال بريد تجريبي للاختبار'}</span>
-            </button>
-
-            {/* De-authorize button */}
-            {hasGmailAuth && (
+            {/* Action Buttons */}
+            <div className="pt-2 flex flex-col sm:flex-row items-stretch sm:items-center gap-3 flex-wrap">
+              {/* Direct Database Permanent Authorization */}
               <button
                 type="button"
-                onClick={handleDeauthorize}
-                className="text-red-700 hover:text-red-800 hover:bg-red-50 text-xs font-bold px-4 py-3 rounded-xl transition-colors cursor-pointer mr-auto"
+                onClick={handleDirectPermanentAuthorization}
+                disabled={isSavingDirectly || isAuthorizing}
+                className="bg-[#053B50] hover:bg-[#042E3F] text-[#FFFFFF] font-bold text-xs px-5 py-3 rounded-xl flex items-center justify-center gap-2 shadow-sm cursor-pointer disabled:opacity-50 transition-colors"
               >
-                إلغاء التفويض
+                <ShieldCheck className="w-4 h-4 text-[#E8DAC8]" />
+                <span>{isSavingDirectly ? 'جاري الحفظ في قاعدة البيانات...' : 'تثبيت وحفظ التفويض الدائم للأبد'}</span>
               </button>
-            )}
+
+              {/* Google OAuth Authorization */}
+              <button
+                type="button"
+                onClick={handleAuthorizeWithGoogle}
+                disabled={isAuthorizing || isSavingDirectly}
+                className="bg-[#FFFFFF] hover:bg-[#F7F3EE] text-[#053B50] border-2 border-[#053B50] font-bold text-xs px-5 py-3 rounded-xl flex items-center justify-center gap-2 shadow-xs cursor-pointer disabled:opacity-50 transition-colors"
+              >
+                <Globe className="w-4 h-4 text-[#053B50]" />
+                <span>{isAuthorizing ? 'جاري الاتصال بـ Google...' : 'ربط وتفويض الحساب عبر Google'}</span>
+              </button>
+
+              {/* Test Email Dispatch */}
+              <button
+                type="button"
+                onClick={handleSendTestEmail}
+                disabled={isSendingTestEmail}
+                className="bg-[#F7F3EE] hover:bg-[#E8DAC8] text-[#053B50] border border-[#E8DAC8] font-bold text-xs px-5 py-3 rounded-xl flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 transition-colors"
+              >
+                <Send className="w-4 h-4" />
+                <span>{isSendingTestEmail ? 'جاري إرسال البريد التجريبي...' : 'إرسال بريد تجريبي للاختبار'}</span>
+              </button>
+
+              {/* De-authorize button */}
+              {hasGmailAuth && (
+                <button
+                  type="button"
+                  onClick={handleDeauthorize}
+                  className="text-red-700 hover:text-red-800 hover:bg-red-50 text-xs font-bold px-4 py-3 rounded-xl transition-colors cursor-pointer mr-auto"
+                >
+                  إلغاء التفويض
+                </button>
+              )}
+            </div>
+
+            {/* Explanation Box */}
+            <div className="p-4 bg-[#F7F3EE]/60 rounded-xl border border-[#E8DAC8] text-[11px] text-[#053B50]/75 space-y-1">
+              <p className="font-bold text-[#053B50]">
+                🛡️ الضمان الدائم للتفويض:
+              </p>
+              <p>
+                بمجرد النقر على <strong>"تثبيت وحفظ التفويض الدائم للأبد"</strong>، يتم تسجيل بريد المشرف في سجل الإعدادات الأساسية لقاعدة بيانات Firebase. سيبقى الحساب مفوضاً بشكل دائم حتى لو قمت بإعادة تشغيل الجهاز أو إغلاق المتصفح أو تحديث الصفحة.
+              </p>
+            </div>
           </div>
 
-          {/* Explanation Box */}
-          <div className="p-4 bg-[#F7F3EE]/60 rounded-xl border border-[#E8DAC8] text-[11px] text-[#053B50]/75 space-y-1">
-            <p className="font-bold text-[#053B50]">
-              🛡️ الضمان الدائم للتفويض:
-            </p>
-            <p>
-              بمجرد النقر على <strong>"تثبيت وحفظ التفويض الدائم للأبد"</strong>، يتم تسجيل بريد المشرف في سجل الإعدادات الأساسية لقاعدة بيانات Firebase. سيبقى الحساب مفوضاً بشكل دائم حتى لو قمت بإعادة تشغيل الجهاز أو إغلاق المتصفح أو تحديث الصفحة.
-            </p>
+          {/* Section 2: Registration & Sign Up Settings */}
+          <div className="bg-[#FFFFFF] border-2 border-[#E8DAC8] rounded-2xl p-6 sm:p-8 shadow-xs space-y-5">
+            <div className="flex items-start sm:items-center justify-between gap-4 pb-4 border-b border-[#E8DAC8]">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-2xl bg-[#053B50] text-[#E8DAC8] flex items-center justify-center shadow-xs">
+                  <Users className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-xl font-black text-[#053B50]">
+                    إعدادات إنشاء الحسابات الخارجية
+                  </h3>
+                  <p className="text-xs text-[#053B50]/75">
+                    التحكم في إمكانية تسجيل المستخدمين الجدد من شاشة تسجيل الدخول
+                  </p>
+                </div>
+              </div>
+
+              <span
+                className={`px-3 py-1 rounded-full text-xs font-bold flex items-center gap-1.5 shrink-0 ${
+                  systemConfig?.allowPublicRegistration !== false
+                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                    : 'bg-amber-100 text-amber-800 border border-amber-300'
+                }`}
+              >
+                {systemConfig?.allowPublicRegistration !== false ? (
+                  <>
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    التسجيل متاح للعموم
+                  </>
+                ) : (
+                  <>
+                    <Lock className="w-3.5 h-3.5" />
+                    التسجيل مغلق
+                  </>
+                )}
+              </span>
+            </div>
+
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-[#F7F3EE] p-5 rounded-xl border border-[#E8DAC8]">
+              <div className="space-y-1">
+                <h4 className="text-xs font-black text-[#053B50]">
+                  حالة زر إنشاء حساب في الصفحة الرئيسية:
+                </h4>
+                <p className="text-[11px] text-[#053B50]/70">
+                  {systemConfig?.allowPublicRegistration !== false
+                    ? 'الزوار يمكنهم إنشاء حساب طالب جديد بشكل ذاتي وتأكيده بالبريد.'
+                    : 'تم إخفاء/تعطيل التسجيل الخارجي، ويقتصر فتح الحسابات على المشرف من تبويب "إدارة الحسابات".'}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                disabled={isTogglingRegInSettings}
+                onClick={() =>
+                  handleTogglePublicRegistration(
+                    !(systemConfig?.allowPublicRegistration ?? true)
+                  )
+                }
+                className={`px-5 py-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-2 cursor-pointer transition-all shadow-xs shrink-0 disabled:opacity-50 ${
+                  systemConfig?.allowPublicRegistration !== false
+                    ? 'bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300'
+                    : 'bg-emerald-600 hover:bg-emerald-700 text-[#FFFFFF]'
+                }`}
+              >
+                {isTogglingRegInSettings ? (
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                ) : systemConfig?.allowPublicRegistration !== false ? (
+                  <Lock className="w-4 h-4" />
+                ) : (
+                  <Check className="w-4 h-4" />
+                )}
+                <span>
+                  {isTogglingRegInSettings
+                    ? 'جاري حفظ الإعداد...'
+                    : systemConfig?.allowPublicRegistration !== false
+                    ? 'تعطيل وإغلاق التسجيل الخارجي'
+                    : 'تفعيل وفتح التسجيل الخارجي'}
+                </span>
+              </button>
+            </div>
+          </div>
+
+          {/* Section 3: Danger Zone - Wipe All System Data */}
+          <div className="bg-red-50/40 border-2 border-red-200 rounded-2xl p-6 sm:p-8 shadow-xs space-y-5">
+            <div className="flex items-start sm:items-center justify-between gap-4 pb-4 border-b border-red-200">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-2xl bg-red-600 text-white flex items-center justify-center shadow-xs">
+                  <ShieldAlert className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-xl font-black text-red-900">
+                    منطقة العمليات الحساسة - تصفير بيانات البرنامج
+                  </h3>
+                  <p className="text-xs text-red-700/80">
+                    حذف شامل لجميع بيانات النظام والمستخدمين والبدء من جديد
+                  </p>
+                </div>
+              </div>
+
+              <span className="px-3 py-1 rounded-full text-[11px] font-bold bg-red-100 text-red-800 border border-red-300 shrink-0">
+                إجراء نهائي لا رجعة فيه
+              </span>
+            </div>
+
+            <div className="bg-[#FFFFFF] p-5 rounded-xl border border-red-200 space-y-3">
+              <h4 className="text-xs font-black text-red-900 flex items-center gap-1.5">
+                <Trash2 className="w-4 h-4 text-red-600" />
+                <span>ما الذي سيحدث عند تنفيذ هذا الإجراء؟</span>
+              </h4>
+              <ul className="text-xs text-red-950/80 space-y-1.5 pr-5 list-disc">
+                <li>
+                  سيتم <strong>حذف كافة المجمعات القرآنية</strong> وجميع تفاصيلها ومواقعها.
+                </li>
+                <li>
+                  سيتم <strong>حذف جميع الحلقات القرآنية</strong> المسجلة.
+                </li>
+                <li>
+                  سيتم <strong>حذف جميع سجلات التسميع والحفظ والتقييمات</strong> للطلاب.
+                </li>
+                <li>
+                  سيتم <strong>حذف كافة حسابات المستخدمين</strong> (الطلاب، المعلمين، والمشرفين الآخرين).
+                </li>
+                <li className="font-bold text-emerald-800 bg-emerald-50 p-2 rounded-lg border border-emerald-200 list-none">
+                  🛡️ <strong>استثناء أمان وحيد:</strong> لن يتم حذف حساب المشرف المعتمد الحالي (<strong>{user.username}</strong> - {user.email || 'المشرف العام'}) لتتمكن من مواصلة إدارة النظام دون فقدان وصولك.
+                </li>
+              </ul>
+            </div>
+
+            <div className="flex items-center justify-end">
+              <button
+                type="button"
+                onClick={() => {
+                  setWipeErrorMsg(null);
+                  setWipeConfirmationInput('');
+                  setShowWipeConfirmModal(true);
+                }}
+                className="bg-red-600 hover:bg-red-700 text-white font-bold text-xs px-6 py-3 rounded-xl flex items-center gap-2 shadow-sm cursor-pointer transition-colors"
+              >
+                <Trash2 className="w-4 h-4 text-red-100" />
+                <span>بدء حذف وتصفير جميع بيانات البرنامج</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Wipe System Data Confirmation */}
+      {showWipeConfirmModal && (
+        <div className="fixed inset-0 z-[1200] bg-[#053B50]/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-[#FFFFFF] border-2 border-red-300 rounded-3xl w-full max-w-lg overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-150">
+            {/* Modal Header */}
+            <div className="bg-red-600 text-white p-5 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center">
+                  <ShieldAlert className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <h3 className="font-black text-base">تأكيد تصفير وحذف جميع البيانات</h3>
+                  <p className="text-white/80 text-[11px]">تحذير أمان: هذا الإجراء سيمسح قاعدة البيانات بالكامل</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={isWipingData}
+                onClick={() => setShowWipeConfirmModal(false)}
+                className="w-8 h-8 rounded-full bg-white/20 hover:bg-white/30 flex items-center justify-center text-white cursor-pointer transition-colors"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 space-y-4">
+              <div className="p-4 bg-red-50 border border-red-200 rounded-xl text-xs text-red-900 space-y-2">
+                <p className="font-bold">هل أنت متأكد تماماً من رغبتك في حذف وتصفير كل بيانات البرنامج؟</p>
+                <p className="text-[11px] leading-relaxed text-red-800">
+                  سيتم محو كافة السجلات، المجمعات، الحلقات، وسجلات التسميع وحسابات المستخدمين دفعة واحدة. الحساب الوحيد المستثنى والمحفوظ هو حسابك الحالي: <strong>({user.username})</strong>.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-[#053B50] mb-2">
+                  لتأكيد الحذف النهائي، اكتب عبارة <span className="text-red-600 font-mono font-black">"حذف الكل"</span> في المربع التالي:
+                </label>
+                <input
+                  type="text"
+                  value={wipeConfirmationInput}
+                  onChange={(e) => setWipeConfirmationInput(e.target.value)}
+                  placeholder='اكتب: حذف الكل'
+                  className="w-full bg-[#FFFFFF] border-2 border-red-200 focus:border-red-600 rounded-xl px-4 py-2.5 text-xs text-[#053B50] outline-none font-bold text-center"
+                />
+              </div>
+
+              {wipeErrorMsg && (
+                <div className="p-3 bg-red-100 border border-red-300 text-red-900 rounded-xl text-xs font-bold flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+                  <span>{wipeErrorMsg}</span>
+                </div>
+              )}
+
+              {/* Actions */}
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#E8DAC8]">
+                <button
+                  type="button"
+                  disabled={isWipingData}
+                  onClick={() => setShowWipeConfirmModal(false)}
+                  className="px-4 py-2.5 bg-[#F7F3EE] hover:bg-[#E8DAC8] text-[#053B50] text-xs font-bold rounded-xl transition-colors cursor-pointer"
+                >
+                  إلغاء التراجع
+                </button>
+
+                <button
+                  type="button"
+                  disabled={wipeConfirmationInput.trim() !== 'حذف الكل' || isWipingData}
+                  onClick={handleWipeAllData}
+                  className="px-5 py-2.5 bg-red-600 hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-bold rounded-xl flex items-center gap-2 transition-colors cursor-pointer shadow-sm"
+                >
+                  {isWipingData ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>جاري تصفير البيانات...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 className="w-4 h-4" />
+                      <span>نعم، احذف جميع البيانات الآن</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

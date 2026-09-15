@@ -10,6 +10,15 @@ service cloud.firestore {
     match /system_config/{configId} {
       allow read, write: if true;
     }
+    match /quran_complexes/{complexId} {
+      allow read, write: if true;
+    }
+    match /quran_circles/{circleId} {
+      allow read, write: if true;
+    }
+    match /recitations/{recitationId} {
+      allow read, write: if true;
+    }
     match /{document=**} {
       allow read, write: if true;
     }

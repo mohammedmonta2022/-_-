@@ -174,6 +174,9 @@ export async function saveSystemConfig(config: Partial<SystemConfig>): Promise<v
     authorizedBy: config.authorizedBy ?? current.authorizedBy,
     configuredAt: new Date().toISOString(),
     allowPublicRegistration: config.allowPublicRegistration !== undefined ? config.allowPublicRegistration : (current.allowPublicRegistration ?? true),
+    preventAutoSeed: config.preventAutoSeed !== undefined ? config.preventAutoSeed : current.preventAutoSeed,
+    hasBeenWiped: config.hasBeenWiped !== undefined ? config.hasBeenWiped : current.hasBeenWiped,
+    wipedAt: config.wipedAt ?? current.wipedAt,
   };
 
   const ref = doc(db, SYSTEM_CONFIG_COLLECTION, MAILER_DOC_ID);
@@ -404,9 +407,39 @@ export async function createBatchUsers(
  */
 export async function updateUserAccount(userId: string, data: Partial<UserAccount>): Promise<boolean> {
   try {
-    const userDoc = doc(db, USERS_COLLECTION, userId);
-    await setDoc(userDoc, data, { merge: true });
-    return true;
+    const cleanId = userId.trim();
+    // Filter out undefined values to prevent Firestore errors
+    const cleanData = Object.fromEntries(
+      Object.entries(data).filter(([_, v]) => v !== undefined)
+    );
+
+    // 1. Direct doc update
+    const userDoc = doc(db, USERS_COLLECTION, cleanId);
+    const snap = await getDoc(userDoc);
+    if (snap.exists()) {
+      await setDoc(userDoc, cleanData, { merge: true });
+      return true;
+    }
+
+    // 2. Search by 'id' property in user document
+    const q = query(collection(db, USERS_COLLECTION), where('id', '==', cleanId));
+    const querySnap = await getDocs(q);
+    if (!querySnap.empty) {
+      for (const d of querySnap.docs) {
+        await setDoc(d.ref, cleanData, { merge: true });
+      }
+      return true;
+    }
+
+    // 3. Fallback to scanning all users if custom id was stored
+    const allUsers = await getDocs(collection(db, USERS_COLLECTION));
+    const matched = allUsers.docs.find((d) => d.id === cleanId || d.data().id === cleanId);
+    if (matched) {
+      await setDoc(matched.ref, cleanData, { merge: true });
+      return true;
+    }
+
+    return false;
   } catch (err) {
     console.error('[Firestore] Error updating user:', err);
     return false;
@@ -418,8 +451,34 @@ export async function updateUserAccount(userId: string, data: Partial<UserAccoun
  */
 export async function deleteUserAccount(userId: string): Promise<boolean> {
   try {
-    const userDoc = doc(db, USERS_COLLECTION, userId);
-    await deleteDoc(userDoc);
+    const cleanId = userId.trim();
+
+    // 1. Direct doc deletion
+    const userDoc = doc(db, USERS_COLLECTION, cleanId);
+    const snap = await getDoc(userDoc);
+    if (snap.exists()) {
+      await deleteDoc(userDoc);
+      return true;
+    }
+
+    // 2. Search by 'id' property
+    const q = query(collection(db, USERS_COLLECTION), where('id', '==', cleanId));
+    const querySnap = await getDocs(q);
+    if (!querySnap.empty) {
+      for (const d of querySnap.docs) {
+        await deleteDoc(d.ref);
+      }
+      return true;
+    }
+
+    // 3. Fallback scan
+    const allUsers = await getDocs(collection(db, USERS_COLLECTION));
+    const matched = allUsers.docs.find((d) => d.id === cleanId || d.data().id === cleanId);
+    if (matched) {
+      await deleteDoc(matched.ref);
+      return true;
+    }
+
     return true;
   } catch (err) {
     console.error('[Firestore] Error deleting user:', err);
@@ -872,6 +931,10 @@ export async function getRecitations(filters?: {
  */
 export async function seedInitialQuranDataIfEmpty(): Promise<void> {
   try {
+    const config = await getSystemConfig();
+    if (config?.preventAutoSeed || config?.hasBeenWiped) {
+      return;
+    }
     const existingComplexes = await getComplexes();
     if (existingComplexes.length > 0) return;
 
@@ -956,5 +1019,144 @@ export async function seedInitialQuranDataIfEmpty(): Promise<void> {
     console.log('[Firestore] Successfully seeded initial Quran education data.');
   } catch (err) {
     console.error('[Firestore] Error seeding initial data:', err);
+  }
+}
+
+/**
+ * Helper to delete documents in safe chunks of 350 to prevent batch limit issues
+ */
+async function deleteDocsInSafeChunks(docs: { ref: any }[]): Promise<number> {
+  let count = 0;
+  const chunkSize = 350;
+  for (let i = 0; i < docs.length; i += chunkSize) {
+    const chunk = docs.slice(i, i + chunkSize);
+    const batch = writeBatch(db);
+    chunk.forEach((d) => batch.delete(d.ref));
+    await batch.commit();
+    count += chunk.length;
+  }
+  return count;
+}
+
+/**
+ * Wipe all system data (complexes, circles, recitations, verification codes, and users)
+ * EXCEPT the current supervisor's account!
+ */
+export async function wipeAllSystemDataExceptSupervisor(supervisor?: {
+  id?: string;
+  username?: string;
+  email?: string;
+} | string): Promise<{
+  deletedUsersCount: number;
+  deletedComplexesCount: number;
+  deletedCirclesCount: number;
+  deletedRecitationsCount: number;
+}> {
+  try {
+    let deletedUsersCount = 0;
+    let deletedComplexesCount = 0;
+    let deletedCirclesCount = 0;
+    let deletedRecitationsCount = 0;
+
+    let currentSuperId = '';
+    let currentSuperUsername = '';
+    let currentSuperEmail = '';
+
+    if (typeof supervisor === 'string') {
+      const trimmed = supervisor.trim();
+      currentSuperId = trimmed;
+      currentSuperUsername = trimmed.toLowerCase();
+      currentSuperEmail = trimmed.toLowerCase();
+    } else if (supervisor && typeof supervisor === 'object') {
+      currentSuperId = (supervisor.id || '').trim();
+      currentSuperUsername = (supervisor.username || '').trim().toLowerCase();
+      currentSuperEmail = (supervisor.email || '').trim().toLowerCase();
+    }
+
+    // 1. Delete all users EXCEPT the supervisor
+    const usersSnap = await getDocs(collection(db, USERS_COLLECTION));
+    const userDocsToDelete: any[] = [];
+    const supervisorDocsToClean: any[] = [];
+
+    for (const uDoc of usersSnap.docs) {
+      const data = uDoc.data() as UserAccount;
+      const docId = uDoc.id.trim();
+      const uUsername = (data.username || '').trim().toLowerCase();
+      const uEmail = (data.email || '').trim().toLowerCase();
+
+      // Check if this doc belongs to the current supervisor
+      const isCurrentSupervisor =
+        (currentSuperId && (docId === currentSuperId || data.id === currentSuperId)) ||
+        (currentSuperUsername && uUsername === currentSuperUsername) ||
+        (currentSuperEmail && uEmail === currentSuperEmail);
+
+      if (isCurrentSupervisor) {
+        supervisorDocsToClean.push(uDoc.ref);
+      } else {
+        userDocsToDelete.push(uDoc);
+        deletedUsersCount++;
+      }
+    }
+
+    // Unlink complexes & circles from supervisor account but keep the login and general_admin role
+    if (supervisorDocsToClean.length > 0) {
+      const supBatch = writeBatch(db);
+      supervisorDocsToClean.forEach((ref) => {
+        supBatch.update(ref, {
+          complexId: '',
+          complexName: '',
+          circleId: '',
+          circleName: '',
+          role: 'general_admin',
+        });
+      });
+      await supBatch.commit();
+    }
+
+    // Delete other users in safe chunks
+    if (userDocsToDelete.length > 0) {
+      await deleteDocsInSafeChunks(userDocsToDelete);
+    }
+
+    // 2. Delete all complexes
+    const complexesSnap = await getDocs(collection(db, COMPLEXES_COLLECTION));
+    if (!complexesSnap.empty) {
+      deletedComplexesCount = await deleteDocsInSafeChunks(complexesSnap.docs);
+    }
+
+    // 3. Delete all circles
+    const circlesSnap = await getDocs(collection(db, CIRCLES_COLLECTION));
+    if (!circlesSnap.empty) {
+      deletedCirclesCount = await deleteDocsInSafeChunks(circlesSnap.docs);
+    }
+
+    // 4. Delete all recitations
+    const recitationsSnap = await getDocs(collection(db, RECITATIONS_COLLECTION));
+    if (!recitationsSnap.empty) {
+      deletedRecitationsCount = await deleteDocsInSafeChunks(recitationsSnap.docs);
+    }
+
+    // 5. Delete temporary verification codes
+    const codesSnap = await getDocs(collection(db, VERIFICATION_COLLECTION));
+    if (!codesSnap.empty) {
+      await deleteDocsInSafeChunks(codesSnap.docs);
+    }
+
+    // 6. Permanently set flags in system_config to prevent any auto-seeding
+    await saveSystemConfig({
+      preventAutoSeed: true,
+      hasBeenWiped: true,
+      wipedAt: new Date().toISOString(),
+    });
+
+    return {
+      deletedUsersCount,
+      deletedComplexesCount,
+      deletedCirclesCount,
+      deletedRecitationsCount,
+    };
+  } catch (err) {
+    console.error('[Firestore] Error wiping system data:', err);
+    throw err;
   }
 }

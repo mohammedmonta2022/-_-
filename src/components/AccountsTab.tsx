@@ -14,6 +14,9 @@ import {
   FileSpreadsheet,
   GraduationCap,
   BookOpen,
+  RefreshCw,
+  Building2,
+  X,
 } from 'lucide-react';
 import type { UserAccount, UserRole, QuranComplex, QuranCircle } from '../types';
 
@@ -87,6 +90,21 @@ export const AccountsTab: React.FC<AccountsTabProps> = ({
 
   // Toggling registration state
   const [togglingReg, setTogglingReg] = useState(false);
+  const [regToggleStatusMsg, setRegToggleStatusMsg] = useState<string | null>(null);
+
+  // User to delete (in-app modal confirmation)
+  const [userToDelete, setUserToDelete] = useState<UserAccount | null>(null);
+  const [isDeletingUser, setIsDeletingUser] = useState(false);
+
+  // Edit User Form State
+  const [editUsername, setEditUsername] = useState('');
+  const [editEmail, setEditEmail] = useState('');
+  const [editRole, setEditRole] = useState<UserRole>('student');
+  const [editPassword, setEditPassword] = useState('');
+  const [editComplexId, setEditComplexId] = useState('');
+  const [editCircleId, setEditCircleId] = useState('');
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const [editSuccessMsg, setEditSuccessMsg] = useState<string | null>(null);
 
   // Filter circles according to selected complex
   const availableCircles = circles.filter(
@@ -98,6 +116,11 @@ export const AccountsTab: React.FC<AccountsTabProps> = ({
 
   const batchAvailableCircles = circles.filter(
     (c) => !batchComplexId || c.complexId === batchComplexId
+  );
+
+  // Circles for editing modal
+  const editAvailableCircles = circles.filter(
+    (c) => !editComplexId || c.complexId === editComplexId
   );
 
   const handleCreateSingle = async (e: React.FormEvent) => {
@@ -173,10 +196,76 @@ export const AccountsTab: React.FC<AccountsTabProps> = ({
 
   const handleToggleReg = async () => {
     setTogglingReg(true);
+    setRegToggleStatusMsg(null);
     try {
-      await onTogglePublicRegistration(!allowPublicRegistration);
+      const nextStatus = !allowPublicRegistration;
+      await onTogglePublicRegistration(nextStatus);
+      setRegToggleStatusMsg(
+        nextStatus
+          ? 'تم تفعيل وإتاحة التسجيل الخارجي بنجاح!'
+          : 'تم إغلاق وتعطيل التسجيل الخارجي بنجاح!'
+      );
+      setTimeout(() => {
+        setRegToggleStatusMsg(null);
+      }, 3000);
+    } catch (err) {
+      console.error('Error toggling registration:', err);
     } finally {
       setTogglingReg(false);
+    }
+  };
+
+  const handleOpenEditUser = (u: UserAccount) => {
+    setEditingUser(u);
+    setEditUsername(u.username || '');
+    setEditEmail(u.email || '');
+    setEditRole(u.role || 'student');
+    setEditPassword('');
+    setEditComplexId(u.complexId || '');
+    setEditCircleId(u.circleId || '');
+    setEditSuccessMsg(null);
+  };
+
+  const handleSaveEditUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingUser || !editingUser.id || !editUsername.trim()) return;
+    setIsSavingEdit(true);
+    setEditSuccessMsg(null);
+    try {
+      const comp = complexes.find((c) => c.id === editComplexId);
+      const circ = circles.find((c) => c.id === editCircleId);
+      await onUpdateUser(editingUser.id, {
+        username: editUsername.trim(),
+        email: editEmail.trim(),
+        role: editRole,
+        complexId: comp?.id || '',
+        complexName: comp?.name || '',
+        circleId: circ?.id || '',
+        circleName: circ?.name || '',
+        ...(editPassword.trim() ? { password: editPassword.trim() } : {}),
+      });
+      setEditSuccessMsg('تم حفظ وتحديث بيانات الحساب والمجمع والحلقة بنجاح!');
+      setTimeout(() => {
+        setEditingUser(null);
+        setEditSuccessMsg(null);
+      }, 1100);
+    } catch (err) {
+      console.error('Error updating user:', err);
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
+
+  const handleConfirmDeleteUser = async () => {
+    if (!userToDelete || !userToDelete.id) return;
+    setIsDeletingUser(true);
+    try {
+      await onDeleteUser(userToDelete.id);
+      setUserToDelete(null);
+    } catch (err) {
+      console.error('Error deleting user:', err);
+    } finally {
+      setIsDeletingUser(false);
     }
   };
 
@@ -212,14 +301,19 @@ export const AccountsTab: React.FC<AccountsTabProps> = ({
               type="button"
               onClick={handleToggleReg}
               disabled={togglingReg}
-              className={`text-xs font-bold px-3.5 py-2 rounded-xl border transition-all flex items-center gap-1.5 cursor-pointer ${
+              className={`text-xs font-bold px-3.5 py-2 rounded-xl border transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-60 ${
                 allowPublicRegistration
                   ? 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100'
                   : 'bg-red-50 text-red-800 border-red-300 hover:bg-red-100'
               }`}
               title="التحكم في إتاحة أو إغلاق التسجيل المفتوح من شاشة تسجيل الدخول الخارجية"
             >
-              {allowPublicRegistration ? (
+              {togglingReg ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin text-[#053B50]" />
+                  <span>جاري حفظ وتحديث إعدادات التسجيل...</span>
+                </>
+              ) : allowPublicRegistration ? (
                 <>
                   <Unlock className="w-4 h-4 text-emerald-600" />
                   <span>التسجيل الخارجي: متاح (انقر للإغلاق)</span>
@@ -253,6 +347,13 @@ export const AccountsTab: React.FC<AccountsTabProps> = ({
             </button>
           </div>
         </div>
+
+        {regToggleStatusMsg && (
+          <div className="mt-3.5 p-3 bg-emerald-50 border border-emerald-300 text-emerald-800 rounded-xl text-xs font-bold flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>{regToggleStatusMsg}</span>
+          </div>
+        )}
       </div>
 
       {/* Filter and Search Bar */}
@@ -375,19 +476,15 @@ export const AccountsTab: React.FC<AccountsTabProps> = ({
                         <div className="flex items-center justify-center gap-1.5">
                           <button
                             type="button"
-                            onClick={() => setEditingUser(u)}
+                            onClick={() => handleOpenEditUser(u)}
                             className="p-1.5 hover:bg-[#E8DAC8] text-[#053B50] rounded-lg transition-colors cursor-pointer"
-                            title="تعديل الحساب"
+                            title="تعديل الحساب وتعيين المجمع والحلقة"
                           >
                             <Edit2 className="w-3.5 h-3.5" />
                           </button>
                           <button
                             type="button"
-                            onClick={() => {
-                              if (window.confirm(`هل أنت متأكد من حذف حساب (${u.username})؟`)) {
-                                if (u.id) onDeleteUser(u.id);
-                              }
-                            }}
+                            onClick={() => setUserToDelete(u)}
                             className="p-1.5 hover:bg-red-100 text-red-600 rounded-lg transition-colors cursor-pointer"
                             title="حذف الحساب"
                           >
@@ -687,62 +784,129 @@ export const AccountsTab: React.FC<AccountsTabProps> = ({
         </div>
       )}
 
-      {/* MODAL: Edit User */}
+      {/* MODAL: Edit User & Transfer */}
       {editingUser && (
         <div className="fixed inset-0 z-[1000] bg-[#053B50]/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#FFFFFF] border-2 border-[#E8DAC8] rounded-2xl w-full max-w-md p-6 shadow-2xl">
-            <h3 className="text-lg font-black text-[#053B50] mb-3">تعديل بيانات الحساب</h3>
-            <form
-              onSubmit={async (e) => {
-                e.preventDefault();
-                if (editingUser.id) {
-                  await onUpdateUser(editingUser.id, {
-                    username: editingUser.username,
-                    email: editingUser.email,
-                    role: editingUser.role,
-                    complexName: editingUser.complexName,
-                    circleName: editingUser.circleName,
-                  });
-                  setEditingUser(null);
-                }
-              }}
-              className="space-y-3 text-xs"
-            >
+          <div className="bg-[#FFFFFF] border-2 border-[#E8DAC8] rounded-2xl w-full max-w-lg p-6 shadow-2xl overflow-y-auto max-h-[92vh]">
+            <div className="flex items-center justify-between mb-3 border-b border-[#E8DAC8] pb-3">
+              <h3 className="text-lg font-black text-[#053B50] flex items-center gap-2">
+                <Edit2 className="w-5 h-5 text-[#053B50]" />
+                <span>تعديل بيانات الحساب ونقله</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setEditingUser(null)}
+                className="text-[#053B50]/60 hover:text-[#053B50] p-1 rounded-lg cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {editSuccessMsg && (
+              <div className="mb-3.5 p-3 bg-emerald-100 border border-emerald-300 text-emerald-800 rounded-xl text-xs font-bold flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>{editSuccessMsg}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleSaveEditUser} className="space-y-3.5 text-xs">
               <div>
                 <label className="block font-bold text-[#053B50] mb-1">اسم المستخدم:</label>
                 <input
                   type="text"
-                  value={editingUser.username}
-                  onChange={(e) => setEditingUser({ ...editingUser, username: e.target.value })}
-                  className="w-full p-2 border border-[#E8DAC8] rounded-xl outline-none focus:border-[#053B50]"
+                  required
+                  value={editUsername}
+                  onChange={(e) => setEditUsername(e.target.value)}
+                  className="w-full p-2.5 border-2 border-[#E8DAC8] rounded-xl outline-none focus:border-[#053B50] text-sm"
                 />
               </div>
 
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-[#053B50] mb-1">البريد الإلكتروني:</label>
+                  <input
+                    type="email"
+                    value={editEmail}
+                    onChange={(e) => setEditEmail(e.target.value)}
+                    placeholder="user@example.com"
+                    dir="ltr"
+                    className="w-full p-2.5 border-2 border-[#E8DAC8] rounded-xl outline-none focus:border-[#053B50] text-right"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-[#053B50] mb-1">نوع الصلاحية:</label>
+                  <select
+                    value={editRole}
+                    onChange={(e) => setEditRole(e.target.value as UserRole)}
+                    className="w-full p-2.5 border-2 border-[#E8DAC8] rounded-xl outline-none focus:border-[#053B50] bg-white font-bold"
+                  >
+                    <option value="student">طالب</option>
+                    <option value="teacher">معلم</option>
+                    <option value="supervisor">مشرف مجمع</option>
+                    <option value="general_admin">مشرف عام</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Transfer Complex & Circle */}
+              <div className="bg-[#F7F3EE] p-3.5 rounded-xl border border-[#E8DAC8] space-y-3">
+                <div className="font-bold text-[#053B50] flex items-center gap-1.5 text-xs">
+                  <Building2 className="w-4 h-4 text-[#053B50]" />
+                  <span>تعيين / نقل الحساب إلى مجمع وحلقة:</span>
+                </div>
+
+                <div>
+                  <label className="block font-medium text-[#053B50] mb-1">المجمع القرآني:</label>
+                  <select
+                    value={editComplexId}
+                    onChange={(e) => {
+                      setEditComplexId(e.target.value);
+                      setEditCircleId('');
+                    }}
+                    className="w-full p-2 border border-[#E8DAC8] rounded-xl outline-none focus:border-[#053B50] bg-white text-xs"
+                  >
+                    <option value="">-- بدون مجمع / غير مرتبط بمجمع --</option>
+                    {complexes.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-medium text-[#053B50] mb-1">الحلقة القرآنية:</label>
+                  <select
+                    value={editCircleId}
+                    onChange={(e) => setEditCircleId(e.target.value)}
+                    className="w-full p-2 border border-[#E8DAC8] rounded-xl outline-none focus:border-[#053B50] bg-white text-xs"
+                  >
+                    <option value="">-- بدون حلقة / غير ملحق بحلقة --</option>
+                    {editAvailableCircles.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Reset Password */}
               <div>
-                <label className="block font-bold text-[#053B50] mb-1">البريد الإلكتروني:</label>
+                <label className="block font-bold text-[#053B50] mb-1">
+                  تغيير كلمة المرور (اختياري - اتركه فارغاً للإبقاء على كلمة المرور الحالية):
+                </label>
                 <input
-                  type="email"
-                  value={editingUser.email}
-                  onChange={(e) => setEditingUser({ ...editingUser, email: e.target.value })}
-                  className="w-full p-2 border border-[#E8DAC8] rounded-xl outline-none focus:border-[#053B50]"
+                  type="password"
+                  value={editPassword}
+                  onChange={(e) => setEditPassword(e.target.value)}
+                  placeholder="أدخل كلمة مرور جديدة إذا أردت تغييرها"
+                  className="w-full p-2.5 border-2 border-[#E8DAC8] rounded-xl outline-none focus:border-[#053B50]"
                 />
               </div>
 
-              <div>
-                <label className="block font-bold text-[#053B50] mb-1">نوع الصلاحية:</label>
-                <select
-                  value={editingUser.role}
-                  onChange={(e) => setEditingUser({ ...editingUser, role: e.target.value as UserRole })}
-                  className="w-full p-2 border border-[#E8DAC8] rounded-xl outline-none focus:border-[#053B50] bg-white font-bold"
-                >
-                  <option value="student">طالب</option>
-                  <option value="teacher">معلم</option>
-                  <option value="supervisor">مشرف مجمع</option>
-                  <option value="general_admin">مشرف عام</option>
-                </select>
-              </div>
-
-              <div className="flex justify-end gap-2 pt-3">
+              <div className="flex justify-end gap-2 pt-3 border-t border-[#E8DAC8]">
                 <button
                   type="button"
                   onClick={() => setEditingUser(null)}
@@ -752,12 +916,85 @@ export const AccountsTab: React.FC<AccountsTabProps> = ({
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 bg-[#053B50] text-[#FFFFFF] rounded-xl font-bold hover:bg-[#042E3F] cursor-pointer"
+                  disabled={isSavingEdit || !editUsername.trim()}
+                  className="px-5 py-2.5 bg-[#053B50] text-[#FFFFFF] rounded-xl font-bold hover:bg-[#042E3F] disabled:opacity-50 cursor-pointer shadow-md flex items-center gap-1.5"
                 >
-                  حفظ التعديلات
+                  {isSavingEdit ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin text-[#E8DAC8]" />
+                      <span>جاري حفظ التعديلات ونقل الحساب...</span>
+                    </>
+                  ) : (
+                    <span>حفظ وتأكيد التعديلات</span>
+                  )}
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: Confirm Delete User (replaces window.confirm) */}
+      {userToDelete && (
+        <div className="fixed inset-0 z-[1050] bg-[#053B50]/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#FFFFFF] border-2 border-red-200 rounded-2xl w-full max-w-md p-6 shadow-2xl">
+            <div className="flex items-center gap-3 mb-3 text-red-600">
+              <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-black text-[#053B50]">تأكيد حذف الحساب نهائياً</h3>
+                <p className="text-xs text-red-600 font-medium">هذا الإجراء لا يمكن التراجع عنه</p>
+              </div>
+            </div>
+
+            <div className="bg-[#F7F3EE] p-3.5 rounded-xl border border-[#E8DAC8] my-4 space-y-1 text-xs text-[#053B50]">
+              <div className="flex justify-between">
+                <span className="font-bold">اسم الحساب:</span>
+                <span className="font-black">{userToDelete.username}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="font-bold">البريد:</span>
+                <span dir="ltr">{userToDelete.email || 'غير مسجل'}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="font-bold">المجمع:</span>
+                <span>{userToDelete.complexName || 'غير محدد'}</span>
+              </div>
+            </div>
+
+            <p className="text-xs text-[#053B50]/80 leading-relaxed mb-5">
+              هل أنت متأكد من رغبتك في حذف هذا الحساب؟ سيتم حذف الحساب نهائياً من قاعدة البيانات ولن يتمكن صاحب الحساب من تسجيل الدخول مرة أخرى.
+            </p>
+
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setUserToDelete(null)}
+                disabled={isDeletingUser}
+                className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-[#053B50] rounded-xl font-bold text-xs cursor-pointer"
+              >
+                إلغاء التراجع
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDeleteUser}
+                disabled={isDeletingUser}
+                className="px-5 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl font-bold text-xs shadow-md disabled:opacity-50 cursor-pointer flex items-center gap-1.5"
+              >
+                {isDeletingUser ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    <span>جاري حذف الحساب...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-4 h-4" />
+                    <span>تأكيد حذف الحساب نهائياً</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}

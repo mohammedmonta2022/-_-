@@ -13,8 +13,6 @@ import {
   ArrowLeft,
   ArrowRight,
   ShieldCheck,
-  Copy,
-  Check,
   User,
 } from 'lucide-react';
 import {
@@ -53,7 +51,6 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [emailNotice, setEmailNotice] = useState<string | null>(null);
   const [isEmailSentSuccess, setIsEmailSentSuccess] = useState(false);
-  const [copiedCode, setCopiedCode] = useState(false);
 
   // Timer for resending verification code
   const [resendTimer, setResendTimer] = useState(60);
@@ -82,7 +79,7 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
 
   if (!isOpen) return null;
 
-  // Step 1: Search user and send code
+  // Step 1: Search user and send code via Gmail
   const handleRequestCode = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -102,94 +99,88 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
       }
 
       const foundUserId = user.id || '';
-      const foundEmail = user.email || '';
+      const foundEmail = (user.email || '').trim();
       const foundUsername = user.username || '';
+
+      if (!foundEmail) {
+        setError(
+          `الحساب المحدد (${foundUsername}) لا يحتوي على بريد إلكتروني مسجل. يرجى التواصل مع مشرف المجمع لإعادة تعيين كلمة المرور يدوياً من لوحة التحكم.`
+        );
+        setLoading(false);
+        return;
+      }
 
       setTargetUserId(foundUserId);
       setTargetEmail(foundEmail);
       setTargetUsername(foundUsername);
 
+      // Generate 6-digit verification code
       const generatedCode = Math.floor(100000 + Math.random() * 900000).toString();
       setActiveCode(generatedCode);
 
-      // Persist code in Firestore
-      if (foundEmail) {
-        await saveVerificationCode(foundEmail, generatedCode, 'reset_password');
-      }
+      // Persist code securely in Firestore
+      await saveVerificationCode(foundEmail, generatedCode, 'reset_password');
 
-      // Try sending email via Gmail
-      let emailDispatched = false;
-      try {
-        const token = await getSavedSenderToken();
-        if (token && foundEmail) {
-          const res = await sendEmailViaGmail({
-            to: foundEmail,
-            subject: `رمز استعادة كلمة المرور - مجمع عزم التعليمي (${generatedCode})`,
-            htmlContent: generateEmailHtml(generatedCode, foundUsername, 'reset_password'),
-          });
-          if (res.success) {
-            emailDispatched = true;
-          }
-        }
-      } catch (err) {
-        console.warn('Gmail API dispatch attempt:', err);
-      }
+      // Send real email via Gmail API using authorized sender
+      const emailResult = await sendEmailViaGmail({
+        to: foundEmail,
+        subject: `رمز استعادة كلمة المرور - مجمع عزم التعليمي (${generatedCode})`,
+        htmlContent: generateEmailHtml(generatedCode, foundUsername, 'reset_password'),
+        allowInteractiveAuth: false,
+      });
 
-      setIsEmailSentSuccess(emailDispatched);
-      if (emailDispatched) {
-        setEmailNotice(`تم إرسال رمز التحقق بنجاح إلى بريدك الإلكتروني: ${foundEmail}`);
-      } else {
-        setEmailNotice(
-          'تعذر الإرسال التلقائي للبريد عبر مزود الخدمة حالياً. لتسهيل الدخول الفوري، رمز التحقق الخاص بحسابك معروض بالأسفل.'
+      if (!emailResult.success) {
+        setError(
+          `تعذر إرسال البريد الإلكتروني: ${
+            emailResult.error || 'بريد الإرسال غير مفوض حالياً.'
+          } يُرجى التأكد من تفويض بريد المشرف المعتمد من تبويب الإعدادات العامة أو مراجعة إدارة المجمع.`
         );
+        setLoading(false);
+        return;
       }
+
+      setIsEmailSentSuccess(true);
+      setEmailNotice(
+        `تم إرسال رمز التحقق بنجاح إلى بريدك الإلكتروني: (${foundEmail}). تفقد صندوق الوارد أو مجلد الرسائل غير المرغوب فيها (Spam) واكتب الرمز المكون من 6 أرقام أدناه.`
+      );
 
       setResendTimer(60);
       setStep('verify_and_reset');
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      setError(`خطأ أثناء البحث عن الحساب: ${msg}`);
+      setError(`خطأ أثناء معالجة الطلب: ${msg}`);
     } finally {
       setLoading(false);
     }
   };
 
-  // Re-send code handler
+  // Re-send code handler via Gmail
   const handleResendCode = async () => {
-    if (resendTimer > 0 || isResending) return;
+    if (resendTimer > 0 || isResending || !targetEmail) return;
     setIsResending(true);
     setError(null);
     try {
       const newCode = Math.floor(100000 + Math.random() * 900000).toString();
       setActiveCode(newCode);
 
-      if (targetEmail) {
-        await saveVerificationCode(targetEmail, newCode, 'reset_password');
+      await saveVerificationCode(targetEmail, newCode, 'reset_password');
+
+      const emailResult = await sendEmailViaGmail({
+        to: targetEmail,
+        subject: `رمز استعادة كلمة المرور الجديد - مجمع عزم التعليمي (${newCode})`,
+        htmlContent: generateEmailHtml(newCode, targetUsername, 'reset_password'),
+        allowInteractiveAuth: false,
+      });
+
+      if (!emailResult.success) {
+        setError(`تعذر إعادة إرسال البريد: ${emailResult.error || 'تأكد من تفويض بريد المشرف'}`);
+        return;
       }
 
-      let emailDispatched = false;
-      try {
-        const token = await getSavedSenderToken();
-        if (token && targetEmail) {
-          const res = await sendEmailViaGmail({
-            to: targetEmail,
-            subject: `رمز استعادة كلمة المرور الجديد - مجمع عزم التعليمي (${newCode})`,
-            htmlContent: generateEmailHtml(newCode, targetUsername, 'reset_password'),
-          });
-          if (res.success) {
-            emailDispatched = true;
-          }
-        }
-      } catch (err) {
-        console.warn('Gmail API resend attempt:', err);
-      }
-
-      setIsEmailSentSuccess(emailDispatched);
-      if (emailDispatched) {
-        setEmailNotice(`تم إرسال رمز جديد إلى بريدك الإلكتروني: ${targetEmail}`);
-      } else {
-        setEmailNotice('تم تحديث رمز التحقق الجديد بنجاح ومعروض بالأسفل لتسهيل المتابعة.');
-      }
+      setIsEmailSentSuccess(true);
+      setEmailNotice(
+        `تم إرسال رمز تحقق جديد بنجاح إلى بريدك الإلكتروني (${targetEmail}). تفقد صندوق الوارد أو مجلد الرسائل غير المرغوب فيها (Spam).`
+      );
       setResendTimer(60);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -249,15 +240,6 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
       setError(`خطأ أثناء تحديث كلمة المرور: ${msg}`);
     } finally {
       setLoading(false);
-    }
-  };
-
-  // Copy code utility
-  const handleCopyCode = () => {
-    if (activeCode) {
-      navigator.clipboard.writeText(activeCode);
-      setCopiedCode(true);
-      setTimeout(() => setCopiedCode(false), 2000);
     }
   };
 
@@ -382,37 +364,6 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
                     <ShieldCheck className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
                   )}
                   <span>{emailNotice}</span>
-                </div>
-              )}
-
-              {/* Instant Verification Code Card (shown if email service is not connected/sent) */}
-              {(!isEmailSentSuccess && activeCode) && (
-                <div className="mb-4 p-3.5 bg-[#F7F3EE] border-2 border-dashed border-[#053B50]/30 rounded-xl">
-                  <div className="flex items-center justify-between mb-1.5">
-                    <span className="text-xs font-bold text-[#053B50]">
-                      رمز التحقق المباشر لحسابك:
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setCode(activeCode)}
-                      className="text-[11px] text-[#053B50] font-bold underline hover:text-[#042E3F] cursor-pointer"
-                    >
-                      تعبئة الرمز تلقائياً
-                    </button>
-                  </div>
-                  <div className="flex items-center justify-between bg-[#FFFFFF] border border-[#E8DAC8] px-3.5 py-2 rounded-lg">
-                    <span dir="ltr" className="font-mono text-xl font-black text-[#053B50] tracking-[8px]">
-                      {activeCode}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={handleCopyCode}
-                      className="p-1.5 text-[#053B50]/70 hover:text-[#053B50] rounded-md hover:bg-[#F7F3EE] transition-colors cursor-pointer"
-                      title="نسخ الرمز"
-                    >
-                      {copiedCode ? <Check className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4" />}
-                    </button>
-                  </div>
                 </div>
               )}
 
